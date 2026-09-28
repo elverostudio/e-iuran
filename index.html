@@ -102,9 +102,7 @@
             50% { transform:scale(1.025); box-shadow:0 0 0 3px rgba(148,163,184,.08); }
         }
         @media (prefers-reduced-motion: reduce) { .status-warga { animation:none; } }
-
-        /* MATRIKS: area scroll vertikal terbatas agar tidak memanjang di HP.
-           Header bulan tetap terlihat saat isi tabel digulir. */
+		
         .matrix-scroll {
             max-height: 360px;
             overflow: auto;
@@ -221,21 +219,14 @@
             }
         }
     </style>
-    <!-- Konfigurasi GitHub Pages (ubah hanya config.js saat URL Apps Script berubah) -->
+    
     <script src="./config.js"></script>
-    <!-- ================================================================
-         GITHUB / APPS SCRIPT COMPATIBILITY BRIDGE
-         - Saat dibuka di GAS: google.script.run asli tetap digunakan.
-         - Saat dibuka di GitHub Pages: google.script.run virtual memakai
-           hidden iframe + HTTP POST ke doPost(e), lalu menerima hasil melalui
-           window.top.postMessage(). Metode ini tidak membutuhkan CORS/fetch.
-         ================================================================ -->
     <script>
         // Isi dengan URL deployment Web App GAS Anda yang berakhiran /exec.
         // Contoh: https://script.google.com/macros/s/AKfycby4dS0zzvqfzSq-1SZbmRWhxRt_pCO_M8OQYDZOK6TKCuX6kEzd4IPU0YM9aC7jdfAo/exec
         window.EIURAN_API_URL = window.EIURAN_API_URL ||
             (window.EIURAN_CONFIG && window.EIURAN_CONFIG.apiUrl) ||
-            'PASTE_GAS_WEB_APP_EXEC_URL_HERE';
+            'https://script.google.com/macros/s/AKfycbzXLxxEMxljD4c9fx_rv8HUucSD50JxNHXqCd55PFaUB3BbL57xTKm-p8oSqsiaMQ/exec';
 
         (function installEiuranGasCompatibilityBridge() {
             const nativeGasRunnerExists =
@@ -1445,8 +1436,6 @@
             link.remove();
         }
 
-        // Saat pengguna kembali dari WhatsApp/browser eksternal, pastikan shell aplikasi
-        // dirender kembali. Ini mencegah tampilan blank akibat lifecycle/bfcache mobile.
         function restoreAppAfterReturn() {
             try {
                 const app = document.getElementById('app-container');
@@ -1770,10 +1759,8 @@
     const isKwitansiIuranWarga = (d.nama && d.nama !== '-') || jenisTransaksi === 'IURAN';
 
     if (isKwitansiIuranWarga) {
-        // ==========================================
-        //  DESAIN 1: KEMBALIKAN DESAIN ASLI IURAN ANDA YANG SUDAH FIX 
-        // ==========================================
-        Swal.fire({
+        
+		Swal.fire({
             title: '',
             width: '400px', // 👈 TAMBAHKAN INI (Mengatur lebar kotak SweetAlert2 agar ramping)
     customClass: {
@@ -2334,13 +2321,10 @@
             });
         }
 
-        // Tampilkan keterangan transaksi tanpa embel-embel metode pembayaran.
-        // Metode tetap dipertahankan pada data internal agar kwitansi/nota tetap dapat menampilkannya.
         function cleanTransactionDisplayText(value) {
             let text = String(value ?? '').trim();
             if (!text) return '-';
-            // Hanya menghapus metode pembayaran yang berada di bagian paling akhir.
-            // Keterangan lain di dalam tanda kurung tetap dipertahankan.
+            
             text = text.replace(/\s*\((?:Tunai(?:\s*\/\s*Cash)?|Transfer\s*Bank(?:\s*\/\s*QRIS)?|QRIS)\)\s*$/i, '').trim();
             return text || '-';
         }
@@ -2411,8 +2395,7 @@
         const totalMutasi = totalPemasukan - totalPengeluaran;
         const saldoAkhir = saldoAwal + totalMutasi;
 
-                //  PERBAIKAN LOGIKA TOMBOL: Membedakan fungsi panggil form kas biasa vs jimpitan ronda
-                        //  PENGUNCIAN FUNGSI TOMBOL: Kas biasa pakai openModal, khusus Jimpitan pakai catatJimpitan()
+                
         let actionBtns = '';
         if (canEdit) {
                                     if (k.id === 'jimpitan') {
