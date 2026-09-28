@@ -24,7 +24,6 @@
             -webkit-tap-highlight-color: transparent;
         }
         
-        /* DASHBOARD: kartu lebih kontras, tetap memakai palet warna modul */
         .dashboard-stat {
             transition: transform .15s ease, box-shadow .15s ease;
         }
@@ -32,7 +31,6 @@
             transform: translateY(1px);
         }
 
-        /* DASHBOARD: ring chart persentase iuran — dibesarkan karena header periode dihapus */
         .dashboard-iuran-ring {
             --ring-percent: 0%;
             --ring-color: #2563eb;
@@ -91,7 +89,6 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
-        /* Status warga: warna + animasi halus, tanpa mengganggu layout */
         .status-warga { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:999px; font-size:9px; font-weight:800; text-transform:uppercase; line-height:1; border:1px solid transparent; animation: statusPulse 2.4s ease-in-out infinite; }
         .status-aktif { background:#dcfce7; color:#15803d; border-color:#86efac; }
         .status-nonaktif { background:#f1f5f9; color:#64748b; border-color:#cbd5e1; }
@@ -219,13 +216,12 @@
             }
         }
     </style>
-    
+  
     <script src="./config.js"></script>
-    
     <script>
         window.EIURAN_API_URL = window.EIURAN_API_URL ||
             (window.EIURAN_CONFIG && window.EIURAN_CONFIG.apiUrl) ||
-            'https://script.google.com/macros/s/AKfycbzXLxxEMxljD4c9fx_rv8HUucSD50JxNHXqCd55PFaUB3BbL57xTKm-p8oSqsiaMQ/exec';
+            'https://script.google.com/macros/s/AKfycby4dS0zzvqfzSq-1SZbmRWhxRt_pCO_M8OQYDZOK6TKCuX6kEzd4IPU0YM9aC7jdfAo/exec';
 
         (function installEiuranGasCompatibilityBridge() {
             const nativeGasRunnerExists =
@@ -850,21 +846,16 @@
         const CURRENT_MONTH = 9; // September
         const CURRENT_YEAR = 2026;
 
-                // DATA WARGA INITIAL (Akan dioverwrite otomatis jika koneksi GAS sukses)
         let dataWarga = [
             { id: 'W000', nama: 'ELVERO STUDIO', nrm: 'NRM 00104', nph: '6289621061984', status: 'AKTIF' }
         ];
 
-        // MOCK DATABASE PEMBAYARAN IURAN
         let mockDB = { utama: {}, sosial: {} };
 
-        // PEMASUKAN NON-IURAN & JIMPITAN HARIAN
         let listPemasukanLain = [];
 
-        // LOG PENGELUARAN KAS
         let listPengeluaran = [];
 
-        // KONFIGURASI ROLES
         const ROLES = [
             { id: 'warga', name: 'Warga', icon: 'fa-user', style: 'bg-slate-100 text-slate-600' },
             { id: 'bendahara', name: 'Bendahara', icon: 'fa-wallet', style: 'bg-blue-600 text-white' },
@@ -873,22 +864,16 @@
             { id: 'super_admin', name: 'Developer', icon: 'fa-user-shield', style: 'bg-purple-600 text-white' }
         ];
 
-        // APP GLOBAL STATE
         let currentActiveKas = 'utama';
         let currentMainTab = 'home';
         let currentRoleIndex = 0;
         let authToken = sessionStorage.getItem('eiuranAuthToken') || '';
         let listAgenda = [];
         let saldoAwalKas = { utama: 0, sosial: 0, jimpitan: 0 };
-        let kasSummary = { utama: null, sosial: null, jimpitan: null };
-        const __transactionCache = new Map();
-        const __transactionLoads = new Map();
-        let __loadedTransactionScope = 'none';
         let auditLog = [];
         let periodLocks = {};
         let listRekonsiliasi = [];
 
-        // Developer login tersembunyi: klik judul E-IURAN RT03 sebanyak 5x dalam 1.8 detik.
         let __developerTapCount = 0;
         let __developerTapTimer = null;
         let __developerTapLastAt = 0;
@@ -919,14 +904,11 @@
             return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);
         }
 
-
-        // Audit log dicatat oleh backend secara otoritatif. Helper ini hanya untuk refresh tampilan setelah aksi.
         function refreshAuditLogQuietly() {
             if (ROLES[currentRoleIndex]?.id !== 'super_admin' || !authToken || !(typeof google !== 'undefined' && google.script && google.script.run)) return;
             google.script.run.withSuccessHandler(rows => { if (Array.isArray(rows)) auditLog = rows; }).withFailureHandler(()=>{}).getAuditLog(authToken);
         }
 
-        // Fungsi pembantu untuk memastikan status warga seragam huruf besar (AKTIF/KONTRAK)
         function normalizeWargaStatus(w) {
             if (!w) return w;
             return {
@@ -946,17 +928,15 @@
             if (!data) return;
             if (Array.isArray(data.warga)) dataWarga = data.warga.map(normalizeWargaStatus);
             if (data.mockDB) mockDB = data.mockDB;
+            if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
+            if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
             if (Array.isArray(data.agenda)) listAgenda = data.agenda;
             if (data.saldoAwal) saldoAwalKas = { ...saldoAwalKas, ...data.saldoAwal };
-            if (data.kasSummary) kasSummary = { ...kasSummary, ...data.kasSummary };
             if (Array.isArray(data.auditLog)) auditLog = data.auditLog;
             if (data.periodLocks) periodLocks = data.periodLocks;
             if (Array.isArray(data.rekonsiliasi)) listRekonsiliasi = data.rekonsiliasi;
-            if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
-            if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
         }
 
-        // Satu request bootstrap: validasi sesi + data publik/admin.
         function bootstrapApp() {
             if (__bootstrapInFlight) return;
             __bootstrapInFlight = true;
@@ -992,7 +972,6 @@
 
         document.addEventListener('DOMContentLoaded', bootstrapApp);
 
-        // Refresh manual / setelah aksi penting. Request paralel digabung supaya tidak menumpuk.
         function refreshDataFromServer() {
             if (__refreshInFlight) return;
             if (!(typeof google !== 'undefined' && google.script && google.script.run)) return;
@@ -1016,50 +995,6 @@
             else runner.getInitialData();
         }
 
-        function ensureTransactionData(scope, year, afterLoad) {
-            scope = String(scope || 'all').toLowerCase();
-            year = Number(year || CURRENT_YEAR);
-            const key = `${scope}_${year}`;
-            const apply = bundle => {
-                if (bundle && Array.isArray(bundle.pemasukan)) listPemasukanLain = bundle.pemasukan.slice();
-                if (bundle && Array.isArray(bundle.pengeluaran)) listPengeluaran = bundle.pengeluaran.slice();
-                __transactionCache.set(key, bundle || { pemasukan:[], pengeluaran:[] });
-                __loadedTransactionScope = scope;
-                if (typeof afterLoad === 'function') afterLoad();
-                return bundle;
-            };
-
-            if (__transactionCache.has(key)) {
-                apply(__transactionCache.get(key));
-                return Promise.resolve(__transactionCache.get(key));
-            }
-            if (__transactionLoads.has(key)) return __transactionLoads.get(key).then(apply);
-            if (!(typeof google !== 'undefined' && google.script && google.script.run)) {
-                if (typeof afterLoad === 'function') afterLoad();
-                return Promise.resolve(null);
-            }
-
-            const promise = new Promise((resolve, reject) => {
-                google.script.run
-                    .withSuccessHandler(resolve)
-                    .withFailureHandler(reject)
-                    .getTransactionBundle(year, scope === 'all' ? 'all' : scope);
-            }).finally(() => __transactionLoads.delete(key));
-            __transactionLoads.set(key, promise);
-            return promise.then(apply).catch(err => {
-                console.error('getTransactionBundle:', err);
-                if (typeof afterLoad === 'function') afterLoad();
-                throw err;
-            });
-        }
-
-        function invalidateLocalTransactionCache() {
-            __transactionCache.clear();
-            __transactionLoads.clear();
-            __loadedTransactionScope = 'none';
-        }
-
-        // Fungsi Central untuk merender ulang UI berdasarkan tab aktif
         function updateAplikasiUI() {
             initSelectWarga();
             if (currentMainTab === 'home') {
@@ -1218,7 +1153,7 @@
         function getCurrentDisplayedYear(){return parseInt(document.getElementById('select-tahun')?.value||CURRENT_YEAR,10);}
         function updatePeriodLockSummary(){const el=document.getElementById('period-lock-summary');if(!el)return;const key=getPeriodKey(CURRENT_YEAR,CURRENT_MONTH);el.textContent=periodLocks[key]?`Periode ${MONTHS[CURRENT_MONTH-1].name} ${CURRENT_YEAR} • TERKUNCI`:`Periode ${MONTHS[CURRENT_MONTH-1].name} ${CURRENT_YEAR} • TERBUKA`;}
         function openPeriodLockModal(){if(!authToken){openLoginModal();return;}if(ROLES[currentRoleIndex]?.id!=='super_admin'){showAksesDitolak('Kunci periode hanya dapat dikelola Developer.');return;}const years=[2026,2027,2028,2029,2030];window.__periodLockSelection={year:CURRENT_YEAR,month:CURRENT_MONTH};Swal.fire({title:'Kontrol Tutup Buku',html:`<div class="text-left space-y-3 text-xs"><div><label class="font-bold text-slate-600 block mb-1">Tahun</label><select id="pl-year" class="w-full border p-2.5 rounded-xl font-bold">${years.map(y=>`<option value="${y}" ${y===CURRENT_YEAR?'selected':''}>${y}</option>`).join('')}</select></div><div><label class="font-bold text-slate-600 block mb-1">Bulan</label><select id="pl-month" class="w-full border p-2.5 rounded-xl font-bold">${MONTHS.map(m=>`<option value="${m.id}" ${m.id===CURRENT_MONTH?'selected':''}>${m.name}</option>`).join('')}</select></div><p id="pl-status" class="text-[10px] text-slate-500"></p></div>`,showDenyButton:true,showCancelButton:true,confirmButtonText:'Kunci Periode',denyButtonText:'Buka Periode',cancelButtonText:'Batal',confirmButtonColor:'#1e293b',denyButtonColor:'#f59e0b',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2',denyButton:'rounded-xl text-xs font-bold px-4 py-2',cancelButton:'rounded-xl text-xs font-bold px-4 py-2'},didOpen:()=>{const upd=()=>{const y=Number(document.getElementById('pl-year').value),m=Number(document.getElementById('pl-month').value);window.__periodLockSelection={year:y,month:m};const key=getPeriodKey(y,m);document.getElementById('pl-status').textContent=periodLocks[key]?'Status saat ini: TERKUNCI':'Status saat ini: TERBUKA';};document.getElementById('pl-year').onchange=upd;document.getElementById('pl-month').onchange=upd;upd();},preConfirm:()=>({year:Number(document.getElementById('pl-year').value),month:Number(document.getElementById('pl-month').value),locked:true})}).then(res=>{if(!res.isConfirmed&&!res.isDenied)return;const value=res.isConfirmed?res.value:{year:Number(window.__periodLockSelection?.year||CURRENT_YEAR),month:Number(window.__periodLockSelection?.month||CURRENT_MONTH),locked:false};if(!value.year||!value.month)return;Swal.fire({title:value.locked?'Mengunci...':'Membuka...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});google.script.run.withSuccessHandler(()=>{periodLocks[getPeriodKey(value.year,value.month)]=!!value.locked;renderLPJ();updatePeriodLockSummary();Swal.fire({icon:'success',title:value.locked?'Periode Dikunci':'Periode Dibuka',timer:1200,showConfirmButton:false});}).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal',text:err?.message||'Status periode gagal diubah.'})).savePeriodLock(value.year,value.month,value.locked,authToken);});}
-        function getKasSystemBalance(kasType){const canUseLists=__loadedTransactionScope==='all'||__loadedTransactionScope===kasType;const summary=kasSummary?.[kasType];let masukIuran=0;if(kasType==='utama'||kasType==='sosial')dataWarga.forEach(w=>masukIuran+=(mockDB[kasType]?.[`${w.id}_2026`]||[]).length*THEMES[kasType].nominal);let masukLain=0,keluar=0;if(canUseLists){masukLain=listPemasukanLain.filter(m=>String(m.kas).trim().toLowerCase()===kasType&&String(m.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,m)=>s+Number(m.nominal||0),0);keluar=listPengeluaran.filter(p=>String(p.kas).trim().toLowerCase()===kasType&&String(p.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,p)=>s+Number(p.nominal||0),0);}else if(summary){masukLain=Number(summary.pemasukan||0);keluar=Number(summary.pengeluaran||0);}return Number(saldoAwalKas[kasType]||0)+masukIuran+masukLain-keluar;}
+        function getKasSystemBalance(kasType){let masukIuran=0;if(kasType==='utama'||kasType==='sosial')dataWarga.forEach(w=>masukIuran+=(mockDB[kasType]?.[`${w.id}_2026`]||[]).length*THEMES[kasType].nominal);const masukLain=listPemasukanLain.filter(m=>String(m.kas).trim().toLowerCase()===kasType&&String(m.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,m)=>s+Number(m.nominal||0),0);const keluar=listPengeluaran.filter(p=>String(p.kas).trim().toLowerCase()===kasType&&String(p.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,p)=>s+Number(p.nominal||0),0);return Number(saldoAwalKas[kasType]||0)+masukIuran+masukLain-keluar;}
         function openRekonsiliasiModal(kasType){if(!authToken){openLoginModal();return;}const perms=getPermissions();if(!perms[kasType]){showAksesDitolak('Rekonsiliasi hanya dapat dilakukan pengurus kas terkait atau Developer.');return;}const systemBalance=getKasSystemBalance(kasType),last=listRekonsiliasi.find(x=>String(x.kas)===kasType);Swal.fire({title:`Rekonsiliasi ${THEMES[kasType].name}`,html:`<div class="text-left text-xs space-y-3"><div class="bg-slate-50 border rounded-xl p-3"><p class="text-slate-500">Saldo Sistem</p><p class="text-lg font-black text-slate-800">${formatRupiah(systemBalance)}</p></div><div><label class="font-bold text-slate-600 block mb-1">Saldo Fisik / Bank</label><input id="rek-fisik" type="number" min="0" value="${last?last.saldoFisik:systemBalance}" class="w-full border p-2.5 rounded-xl text-sm font-bold"></div><div><label class="font-bold text-slate-600 block mb-1">Catatan</label><textarea id="rek-catatan" class="w-full border p-2.5 rounded-xl text-xs" rows="3" placeholder="Contoh: cash opname setelah penutupan bulan">${last?escapeHtml(last.catatan):''}</textarea></div></div>`,showCancelButton:true,confirmButtonText:'Simpan Rekonsiliasi',cancelButtonText:'Batal',confirmButtonColor:THEMES[kasType].btnColor||'#2563eb',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2',cancelButton:'rounded-xl text-xs font-bold px-4 py-2'},preConfirm:()=>{const fisik=Number(document.getElementById('rek-fisik')?.value);if(!Number.isFinite(fisik)||fisik<0){Swal.showValidationMessage('Saldo fisik tidak valid.');return false;}return {fisik,catatan:document.getElementById('rek-catatan')?.value||''};}}).then(res=>{if(!res.isConfirmed)return;Swal.fire({title:'Menyimpan...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});google.script.run.withSuccessHandler(resp=>{listRekonsiliasi.unshift({kas:kasType,saldoSistem:systemBalance,saldoFisik:res.value.fisik,selisih:Number(resp.selisih||res.value.fisik-systemBalance),catatan:res.value.catatan});renderLPJ();const d=Number(resp.selisih||0);Swal.fire({icon:Math.abs(d)<1?'success':'warning',title:Math.abs(d)<1?'Rekonsiliasi Seimbang':'Ada Selisih',text:`Selisih: ${formatRupiah(d)}`,timer:1800,showConfirmButton:false});}).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal',text:err?.message||'Rekonsiliasi gagal disimpan.'})).saveReconciliation(kasType,2026,systemBalance,res.value.fisik,res.value.catatan,authToken);});}
 
         function renderRoleSensitiveUI() {
@@ -1368,10 +1303,6 @@
             setRoleFromId('warga');
             auditLog = [];
             listRekonsiliasi = [];
-            invalidateLocalTransactionCache();
-            listPemasukanLain = [];
-            listPengeluaran = [];
-            __loadedTransactionScope = 'none';
             if (typeof google !== 'undefined' && google.script && google.script.run && token) {
                 google.script.run.logoutAdmin(token);
             }
@@ -1419,10 +1350,10 @@
             if (mainContent) mainContent.classList.toggle('layout-inner-scroll', tab === 'jimpitan' || tab === 'warga');
 
             if (tab === 'home') renderDashboard();
-            else if (tab === 'kas') { renderLPJ(); ensureTransactionData('all', CURRENT_YEAR, renderLPJ); }
+            else if (tab === 'kas') renderLPJ();
             else if (tab === 'warga') renderListWarga();
             else if (tab === 'rekap') renderRekapMatrix();
-            else if (tab === 'jimpitan') { renderJimpitan(); ensureTransactionData('jimpitan', CURRENT_YEAR, renderJimpitan); }
+            else if (tab === 'jimpitan') renderJimpitan();
             else if (tab === 'iuran') renderDataIuran();
         }
 
@@ -1473,8 +1404,6 @@
             const message = `Halo ${String(nama || '').trim()},`;
             const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 
-            // Buka WhatsApp di tab/jendela baru dari gesture klik pengguna.
-            // Jangan fallback ke window.location agar halaman E-Iuran tidak ikut berpindah.
             const link = document.createElement('a');
             link.href = url;
             link.target = '_blank';
@@ -1486,8 +1415,6 @@
             link.remove();
         }
 
-        // Saat pengguna kembali dari WhatsApp/browser eksternal, pastikan shell aplikasi
-        // dirender kembali. Ini mencegah tampilan blank akibat lifecycle/bfcache mobile.
         function restoreAppAfterReturn() {
             try {
                 const app = document.getElementById('app-container');
@@ -1731,8 +1658,6 @@
             });
         }
 
-        // --- MESIN KWITANSI DIGITAL TERPUSAT ---
-        // Satu snapshot data dipakai oleh popup DAN file PNG agar isinya selalu identik.
         window.__kwitansiData = null;
 
         function escapeReceiptText(value) {
@@ -1806,11 +1731,11 @@
     const nominalFormat = formatRupiah(Number(d.nominal) || 0);
     const labelKas = String(d.kasName || d.kasType || '-').toUpperCase();
 
-    
+    // 🌟 GERBANG PEMISAH: Cek apakah ini Kwitansi Iuran Bulanan Warga asli
+    // Cirinya: Kolom 'nama' atau 'nrm' diisi data asli, atau jenis transaksi berupa 'IURAN'
     const isKwitansiIuranWarga = (d.nama && d.nama !== '-') || jenisTransaksi === 'IURAN';
 
     if (isKwitansiIuranWarga) {
-        
         Swal.fire({
             title: '',
             width: '400px', // 👈 TAMBAHKAN INI (Mengatur lebar kotak SweetAlert2 agar ramping)
@@ -2141,7 +2066,6 @@
     }
 }
 
-        // --- FUNGSI JIMPITAN HARIAN & NON-IURAN ---
         function renderJimpitan() {
     const perms = getPermissions();
     const btnBox = document.getElementById('box-btn-jimpitan');
@@ -2155,7 +2079,6 @@
     if (!container) return;
     container.innerHTML = '';
 
-    // Lakukan filterisasi yang aman dari spasi tersembunyi
     const itemsMasuk = listPemasukanLain.filter(m => String(m.kas).trim().toLowerCase() === 'jimpitan' && String(m.status || 'ACTIVE').toUpperCase() !== 'VOID');
     const itemsKeluar = listPengeluaran.filter(p => String(p.kas).trim().toLowerCase() === 'jimpitan' && String(p.status || 'ACTIVE').toUpperCase() !== 'VOID');
 
@@ -2167,7 +2090,6 @@
     const statTotal = document.getElementById('stat-jimpitan-total');
     if (statTotal) statTotal.textContent = formatRupiah(saldoJimpitan);
 
-    // Gabung & Urutkan Log secara aman
     const allLogs = [
         ...itemsMasuk.map(i => ({ ...i, type: 'masuk' })),
         ...itemsKeluar.map(i => ({ ...i, type: 'keluar' }))
@@ -2189,11 +2111,9 @@
         const sign = isMasuk ? '+' : '-';
         const textColor = isMasuk ? 'text-amber-600' : 'text-rose-600';
 
-        // Ambil properti keterangan secara aman
         const teksKeterangan = cleanTransactionDisplayText(j.keterangan || j.ket || (isMasuk ? 'Jimpitan Ronda Malam' : 'Pengeluaran Kas'));
         const namaPetugas = j.petugas || (isMasuk ? 'Petugas' : 'Admin');
 
-        // Kembalikan ke tampilan log awal tanpa tombol edit tambahan agar tidak duplikat
         const item = `
             <div class="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
                 <div class="flex items-center space-x-3 min-w-0 flex-1">
@@ -2215,16 +2135,14 @@
         function catatJimpitan(idEdit = null) {
     if (!authToken) { openLoginModal(); return; }
 
-    // 1. FILTER CERDAS: Jika isi kurung kosong atau berisi kata pemicu tombol menu utama ('masuk'), anggap TAMBAH BARU
     if (!idEdit || idEdit === 'masuk') {
         idEdit = null;
     }
 
-    // 2. Cari data lama dari array listPemasukanLain berdasarkan ID yang dikirim tombol edit
     const dataLama = idEdit ? listPemasukanLain.find(item => item.id === idEdit) : null;
 
     Swal.fire({
-        // Judul otomatis menyesuaikan status tindakan
+        
         title: idEdit ? 'Ubah Jimpitan Ronda' : 'Jimpitan Ronda Malam',
         html: `
             <div class="text-left space-y-3 text-xs">
@@ -2369,7 +2287,8 @@
         function cleanTransactionDisplayText(value) {
             let text = String(value ?? '').trim();
             if (!text) return '-';
-            
+            // Hanya menghapus metode pembayaran yang berada di bagian paling akhir.
+            // Keterangan lain di dalam tanda kurung tetap dipertahankan.
             text = text.replace(/\s*\((?:Tunai(?:\s*\/\s*Cash)?|Transfer\s*Bank(?:\s*\/\s*QRIS)?|QRIS)\)\s*$/i, '').trim();
             return text || '-';
         }
@@ -2438,7 +2357,6 @@
         const totalMutasi = totalPemasukan - totalPengeluaran;
         const saldoAkhir = saldoAwal + totalMutasi;
 
-                
         let actionBtns = '';
         if (canEdit) {
                                     if (k.id === 'jimpitan') {
@@ -2466,7 +2384,7 @@
         } else {
             actionBtns = `<div class="mt-3 text-center text-[10px] text-slate-400 p-2 bg-slate-50 rounded-lg border border-slate-100"><i class="fas fa-lock mr-1"></i>Akses Khusus Pengurus</div>`;
         }
-        // Gabungkan seluruh data riwayat transaksi
+        
         const transaksiKwitansi = [
             ...iuranWargaList,
             ...pemasukanKas.map(m => ({
@@ -2489,12 +2407,10 @@
             }))
         ].sort((a, b) => new Date(b.tanggal) - new Date(a.tanggal));
 
-        // RENDER DAN FILTERISASI TOMBOL BERDASARKAN JENIS TRANSAKSI
         const transaksiHtml = transaksiKwitansi.length ? transaksiKwitansi.map(t => {
             const stringId = String(t.id || '');
             const txTypeLower = t.jenis === 'PEMASUKAN' ? 'pemasukan' : 'pengeluaran';
 
-            // 1. Kondisi Tombol Kwitansi: HANYA muncul jika BUKAN iuran bulanan warga
             let tombolKwitansi = '';
             if (!t.isIuranWarga && stringId !== '') {
                 tombolKwitansi = `
@@ -2504,13 +2420,10 @@
                 `;
             }
 
-                        
             let actionButtons = '';
             if (!t.isIuranWarga && canEdit && stringId !== '') {
                 
-                // 🔥 SOLUSI SAKTI: Cek apakah transaksi ini milik kas jimpitan
                 const isJimpitan = String(t.kas).trim().toLowerCase() === 'jimpitan';
-                
                 
                 const fungsiEdit = isJimpitan 
                     ? `catatJimpitan('${stringId}')` 
@@ -2540,7 +2453,6 @@
             </div>`;
         }).join('') : '<p class="text-[10px] text-slate-400 italic py-1">Belum ada transaksi berkwitansi.</p>';
 
-        // Susun cetakan Card LPJ ke Container HTML
         const card = `
             <div class="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 border-l-4 ${k.border} relative overflow-hidden">
                 <div class="flex justify-between items-center mb-3">
@@ -2601,7 +2513,7 @@
         } else {
             alert("Fungsi popup SweetAlert Jimpitan tidak ditemukan!");
         }
-        return; // STOP! Sisa kode form donasi di bawah tidak akan pernah dijalankan
+        return; 
     }
     Swal.fire({
         title: `Pemasukan ${THEMES[kasType].name}`,
@@ -2671,7 +2583,7 @@
 
             if (typeof google !== 'undefined' && google.script && google.script.run) {
                 google.script.run
-                    .withSuccessHandler(() => { invalidateLocalTransactionCache(); renderLPJ(); })
+                    .withSuccessHandler(() => { renderLPJ(); })
                     .withFailureHandler(err => { console.error('saveTransaction pemasukan:', err); Swal.fire({ icon:'error', title:'Gagal Menyimpan', text:'Pemasukan gagal disimpan ke Google Sheets.' }); })
                     .saveTransaction('pemasukan', newObj, authToken);
             }
@@ -2754,7 +2666,7 @@ function openModalPengeluaran(kasType) {
 
             if (typeof google !== 'undefined' && google.script && google.script.run) {
                 google.script.run
-                    .withSuccessHandler(() => { invalidateLocalTransactionCache(); renderLPJ(); })
+                    .withSuccessHandler(() => { renderLPJ(); })
                     .withFailureHandler(err => { console.error('saveTransaction pengeluaran:', err); Swal.fire({ icon:'error', title:'Gagal Menyimpan', text:'Pengeluaran gagal disimpan ke Google Sheets.' }); })
                     .saveTransaction('pengeluaran', newObj, authToken);
             }
@@ -2869,7 +2781,6 @@ function openModalPengeluaran(kasType) {
 		</body>
 	</html>`;
 
-            // Preview menggunakan dokumen terpisah sehingga CSS aplikasi/SweetAlert tidak dapat membuat halaman print blank.
             const preview = window.open('', '_blank', 'width=900,height=1000,scrollbars=yes,resizable=yes');
             if (!preview) {
                 Swal.fire({ icon: 'warning', title: 'Popup Diblokir', text: 'Izinkan popup untuk membuka preview LPJ.' });
@@ -3260,7 +3171,6 @@ function openModalPengeluaran(kasType) {
             });
         }
 
-        // --- FUNGSI DUAL MATRIKS REKAPITULASI (UTAMA & SOSIAL) ---
         function renderRekapMatrix() {
             renderMatrixByKas('utama', 'tbody-rekap-utama');
             renderMatrixByKas('sosial', 'tbody-rekap-sosial');
@@ -3343,7 +3253,7 @@ function eksekusiHapusTransaksiDariModal() {
     Swal.fire({title:'Membatalkan...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});
     if (typeof google !== 'undefined' && google.script && google.script.run) {
         google.script.run.withSuccessHandler(response=>{
-            if(response?.status==='success'){ invalidateLocalTransactionCache(); const target=(type==='pemasukan'?listPemasukanLain:listPengeluaran).find(x=>String(x.id)===String(id)); if(target){ target.status='VOID'; target.voidReason=reason; } renderLPJ(); renderJimpitan(); Swal.fire({icon:'success',title:'Transaksi VOID',text:'Transaksi dibatalkan tanpa menghapus histori.',timer:1100,showConfirmButton:false}); }
+            if(response?.status==='success'){ const target=(type==='pemasukan'?listPemasukanLain:listPengeluaran).find(x=>String(x.id)===String(id)); if(target){ target.status='VOID'; target.voidReason=reason; } renderLPJ(); renderJimpitan(); Swal.fire({icon:'success',title:'Transaksi VOID',text:'Transaksi dibatalkan tanpa menghapus histori.',timer:1100,showConfirmButton:false}); }
             else Swal.fire({icon:'warning',title:'Tidak Ada Perubahan',text:'Transaksi tidak ditemukan atau sudah VOID.'});
         }).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal Membatalkan',text:err?.message||'Transaksi gagal dibatalkan.'})).deleteTransaction(type,id,authToken,reason);
     }
@@ -3353,7 +3263,6 @@ function aksiEditTransaksi(type, idEdit) {
     if (!authToken) { openLoginModal(); return; }
     if (!idEdit) return;
 
-    // 1. Ambil data lama berdasarkan array database frontend Anda
     const listTarget = type === 'pemasukan' ? listPemasukanLain : listPengeluaran;
     const dataLama = listTarget.find(item => String(item.id) === String(idEdit));
 
@@ -3362,7 +3271,6 @@ function aksiEditTransaksi(type, idEdit) {
         return;
     }
 
-    // 2. Deteksi otomatis nama kas untuk judul popup (Utama, Sosial, Jimpitan)
     const namaKas = dataLama.kas ? dataLama.kas.toUpperCase() : 'UTAMA';
 
     Swal.fire({
@@ -3410,9 +3318,7 @@ function aksiEditTransaksi(type, idEdit) {
                 return;
             }
 
-            // 3. Bersihkan nama kas dari kata "Kas" berlebih agar kwitansi normal kembali
             let namaKasBersih = dataLama.kas || 'Utama';
-            // Menghapus kata "kas " atau "KAS " jika di database sudah terlanjur berlipat ganda
             namaKasBersih = String(namaKasBersih).replace(/kas/gi, '').trim();
 
             const transObj = { 
@@ -3425,13 +3331,11 @@ function aksiEditTransaksi(type, idEdit) {
                 petugas: petugas || 'Admin'
             };
             
-            // 4. SISI FRONTEND: Cari posisinya di array, lalu TIMPA datanya (Murni menimpa, bukan push!)
             const index = listTarget.findIndex(item => String(item.id) === String(idEdit));
             if (index !== -1) {
                 listTarget[index] = transObj;
             }
 
-            // 5. SISI BACKEND: Kirim ke Google Apps Script (Memanfaatkan kode .gs anti-duplikat yang kita buat sebelumnya)
             if (typeof google !== 'undefined' && google.script && google.script.run) {
                 google.script.run.updateTransaction(type, transObj, authToken);
             }
@@ -3444,7 +3348,6 @@ function aksiEditTransaksi(type, idEdit) {
                 showConfirmButton: false 
             });
             
-            // 6. Refresh semua jenis tampilan UI secara real-time
             if (typeof updateAplikasiUI === 'function') updateAplikasiUI();
             if (typeof renderJimpitan === 'function') renderJimpitan();
             if (typeof renderLPJ === 'function') renderLPJ();
