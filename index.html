@@ -102,7 +102,7 @@
             50% { transform:scale(1.025); box-shadow:0 0 0 3px rgba(148,163,184,.08); }
         }
         @media (prefers-reduced-motion: reduce) { .status-warga { animation:none; } }
-		
+
         .matrix-scroll {
             max-height: 360px;
             overflow: auto;
@@ -221,9 +221,8 @@
     </style>
     
     <script src="./config.js"></script>
+    
     <script>
-        // Isi dengan URL deployment Web App GAS Anda yang berakhiran /exec.
-        // Contoh: https://script.google.com/macros/s/AKfycby4dS0zzvqfzSq-1SZbmRWhxRt_pCO_M8OQYDZOK6TKCuX6kEzd4IPU0YM9aC7jdfAo/exec
         window.EIURAN_API_URL = window.EIURAN_API_URL ||
             (window.EIURAN_CONFIG && window.EIURAN_CONFIG.apiUrl) ||
             'https://script.google.com/macros/s/AKfycbzXLxxEMxljD4c9fx_rv8HUucSD50JxNHXqCd55PFaUB3BbL57xTKm-p8oSqsiaMQ/exec';
@@ -807,7 +806,6 @@
     </div>
 
     <script>
-        // --- KONFIGURASI MASTER TEMA & KAS ---
         const THEMES = {
             utama: {
                 name: 'KAS UTAMA',
@@ -882,6 +880,10 @@
         let authToken = sessionStorage.getItem('eiuranAuthToken') || '';
         let listAgenda = [];
         let saldoAwalKas = { utama: 0, sosial: 0, jimpitan: 0 };
+        let kasSummary = { utama: null, sosial: null, jimpitan: null };
+        const __transactionCache = new Map();
+        const __transactionLoads = new Map();
+        let __loadedTransactionScope = 'none';
         let auditLog = [];
         let periodLocks = {};
         let listRekonsiliasi = [];
@@ -944,13 +946,14 @@
             if (!data) return;
             if (Array.isArray(data.warga)) dataWarga = data.warga.map(normalizeWargaStatus);
             if (data.mockDB) mockDB = data.mockDB;
-            if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
-            if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
             if (Array.isArray(data.agenda)) listAgenda = data.agenda;
             if (data.saldoAwal) saldoAwalKas = { ...saldoAwalKas, ...data.saldoAwal };
+            if (data.kasSummary) kasSummary = { ...kasSummary, ...data.kasSummary };
             if (Array.isArray(data.auditLog)) auditLog = data.auditLog;
             if (data.periodLocks) periodLocks = data.periodLocks;
             if (Array.isArray(data.rekonsiliasi)) listRekonsiliasi = data.rekonsiliasi;
+            if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
+            if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
         }
 
         // Satu request bootstrap: validasi sesi + data publik/admin.
@@ -1011,6 +1014,49 @@
             const runner = google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onFailure);
             if (authToken && ROLES[currentRoleIndex]?.id !== 'warga') runner.getAdminInitialData(authToken);
             else runner.getInitialData();
+        }
+
+        function ensureTransactionData(scope, year, afterLoad) {
+            scope = String(scope || 'all').toLowerCase();
+            year = Number(year || CURRENT_YEAR);
+            const key = `${scope}_${year}`;
+            const apply = bundle => {
+                if (bundle && Array.isArray(bundle.pemasukan)) listPemasukanLain = bundle.pemasukan.slice();
+                if (bundle && Array.isArray(bundle.pengeluaran)) listPengeluaran = bundle.pengeluaran.slice();
+                __transactionCache.set(key, bundle || { pemasukan:[], pengeluaran:[] });
+                __loadedTransactionScope = scope;
+                if (typeof afterLoad === 'function') afterLoad();
+                return bundle;
+            };
+
+            if (__transactionCache.has(key)) {
+                apply(__transactionCache.get(key));
+                return Promise.resolve(__transactionCache.get(key));
+            }
+            if (__transactionLoads.has(key)) return __transactionLoads.get(key).then(apply);
+            if (!(typeof google !== 'undefined' && google.script && google.script.run)) {
+                if (typeof afterLoad === 'function') afterLoad();
+                return Promise.resolve(null);
+            }
+
+            const promise = new Promise((resolve, reject) => {
+                google.script.run
+                    .withSuccessHandler(resolve)
+                    .withFailureHandler(reject)
+                    .getTransactionBundle(year, scope === 'all' ? 'all' : scope);
+            }).finally(() => __transactionLoads.delete(key));
+            __transactionLoads.set(key, promise);
+            return promise.then(apply).catch(err => {
+                console.error('getTransactionBundle:', err);
+                if (typeof afterLoad === 'function') afterLoad();
+                throw err;
+            });
+        }
+
+        function invalidateLocalTransactionCache() {
+            __transactionCache.clear();
+            __transactionLoads.clear();
+            __loadedTransactionScope = 'none';
         }
 
         // Fungsi Central untuk merender ulang UI berdasarkan tab aktif
@@ -1172,7 +1218,7 @@
         function getCurrentDisplayedYear(){return parseInt(document.getElementById('select-tahun')?.value||CURRENT_YEAR,10);}
         function updatePeriodLockSummary(){const el=document.getElementById('period-lock-summary');if(!el)return;const key=getPeriodKey(CURRENT_YEAR,CURRENT_MONTH);el.textContent=periodLocks[key]?`Periode ${MONTHS[CURRENT_MONTH-1].name} ${CURRENT_YEAR} • TERKUNCI`:`Periode ${MONTHS[CURRENT_MONTH-1].name} ${CURRENT_YEAR} • TERBUKA`;}
         function openPeriodLockModal(){if(!authToken){openLoginModal();return;}if(ROLES[currentRoleIndex]?.id!=='super_admin'){showAksesDitolak('Kunci periode hanya dapat dikelola Developer.');return;}const years=[2026,2027,2028,2029,2030];window.__periodLockSelection={year:CURRENT_YEAR,month:CURRENT_MONTH};Swal.fire({title:'Kontrol Tutup Buku',html:`<div class="text-left space-y-3 text-xs"><div><label class="font-bold text-slate-600 block mb-1">Tahun</label><select id="pl-year" class="w-full border p-2.5 rounded-xl font-bold">${years.map(y=>`<option value="${y}" ${y===CURRENT_YEAR?'selected':''}>${y}</option>`).join('')}</select></div><div><label class="font-bold text-slate-600 block mb-1">Bulan</label><select id="pl-month" class="w-full border p-2.5 rounded-xl font-bold">${MONTHS.map(m=>`<option value="${m.id}" ${m.id===CURRENT_MONTH?'selected':''}>${m.name}</option>`).join('')}</select></div><p id="pl-status" class="text-[10px] text-slate-500"></p></div>`,showDenyButton:true,showCancelButton:true,confirmButtonText:'Kunci Periode',denyButtonText:'Buka Periode',cancelButtonText:'Batal',confirmButtonColor:'#1e293b',denyButtonColor:'#f59e0b',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2',denyButton:'rounded-xl text-xs font-bold px-4 py-2',cancelButton:'rounded-xl text-xs font-bold px-4 py-2'},didOpen:()=>{const upd=()=>{const y=Number(document.getElementById('pl-year').value),m=Number(document.getElementById('pl-month').value);window.__periodLockSelection={year:y,month:m};const key=getPeriodKey(y,m);document.getElementById('pl-status').textContent=periodLocks[key]?'Status saat ini: TERKUNCI':'Status saat ini: TERBUKA';};document.getElementById('pl-year').onchange=upd;document.getElementById('pl-month').onchange=upd;upd();},preConfirm:()=>({year:Number(document.getElementById('pl-year').value),month:Number(document.getElementById('pl-month').value),locked:true})}).then(res=>{if(!res.isConfirmed&&!res.isDenied)return;const value=res.isConfirmed?res.value:{year:Number(window.__periodLockSelection?.year||CURRENT_YEAR),month:Number(window.__periodLockSelection?.month||CURRENT_MONTH),locked:false};if(!value.year||!value.month)return;Swal.fire({title:value.locked?'Mengunci...':'Membuka...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});google.script.run.withSuccessHandler(()=>{periodLocks[getPeriodKey(value.year,value.month)]=!!value.locked;renderLPJ();updatePeriodLockSummary();Swal.fire({icon:'success',title:value.locked?'Periode Dikunci':'Periode Dibuka',timer:1200,showConfirmButton:false});}).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal',text:err?.message||'Status periode gagal diubah.'})).savePeriodLock(value.year,value.month,value.locked,authToken);});}
-        function getKasSystemBalance(kasType){let masukIuran=0;if(kasType==='utama'||kasType==='sosial')dataWarga.forEach(w=>masukIuran+=(mockDB[kasType]?.[`${w.id}_2026`]||[]).length*THEMES[kasType].nominal);const masukLain=listPemasukanLain.filter(m=>String(m.kas).trim().toLowerCase()===kasType&&String(m.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,m)=>s+Number(m.nominal||0),0);const keluar=listPengeluaran.filter(p=>String(p.kas).trim().toLowerCase()===kasType&&String(p.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,p)=>s+Number(p.nominal||0),0);return Number(saldoAwalKas[kasType]||0)+masukIuran+masukLain-keluar;}
+        function getKasSystemBalance(kasType){const canUseLists=__loadedTransactionScope==='all'||__loadedTransactionScope===kasType;const summary=kasSummary?.[kasType];let masukIuran=0;if(kasType==='utama'||kasType==='sosial')dataWarga.forEach(w=>masukIuran+=(mockDB[kasType]?.[`${w.id}_2026`]||[]).length*THEMES[kasType].nominal);let masukLain=0,keluar=0;if(canUseLists){masukLain=listPemasukanLain.filter(m=>String(m.kas).trim().toLowerCase()===kasType&&String(m.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,m)=>s+Number(m.nominal||0),0);keluar=listPengeluaran.filter(p=>String(p.kas).trim().toLowerCase()===kasType&&String(p.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,p)=>s+Number(p.nominal||0),0);}else if(summary){masukLain=Number(summary.pemasukan||0);keluar=Number(summary.pengeluaran||0);}return Number(saldoAwalKas[kasType]||0)+masukIuran+masukLain-keluar;}
         function openRekonsiliasiModal(kasType){if(!authToken){openLoginModal();return;}const perms=getPermissions();if(!perms[kasType]){showAksesDitolak('Rekonsiliasi hanya dapat dilakukan pengurus kas terkait atau Developer.');return;}const systemBalance=getKasSystemBalance(kasType),last=listRekonsiliasi.find(x=>String(x.kas)===kasType);Swal.fire({title:`Rekonsiliasi ${THEMES[kasType].name}`,html:`<div class="text-left text-xs space-y-3"><div class="bg-slate-50 border rounded-xl p-3"><p class="text-slate-500">Saldo Sistem</p><p class="text-lg font-black text-slate-800">${formatRupiah(systemBalance)}</p></div><div><label class="font-bold text-slate-600 block mb-1">Saldo Fisik / Bank</label><input id="rek-fisik" type="number" min="0" value="${last?last.saldoFisik:systemBalance}" class="w-full border p-2.5 rounded-xl text-sm font-bold"></div><div><label class="font-bold text-slate-600 block mb-1">Catatan</label><textarea id="rek-catatan" class="w-full border p-2.5 rounded-xl text-xs" rows="3" placeholder="Contoh: cash opname setelah penutupan bulan">${last?escapeHtml(last.catatan):''}</textarea></div></div>`,showCancelButton:true,confirmButtonText:'Simpan Rekonsiliasi',cancelButtonText:'Batal',confirmButtonColor:THEMES[kasType].btnColor||'#2563eb',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2',cancelButton:'rounded-xl text-xs font-bold px-4 py-2'},preConfirm:()=>{const fisik=Number(document.getElementById('rek-fisik')?.value);if(!Number.isFinite(fisik)||fisik<0){Swal.showValidationMessage('Saldo fisik tidak valid.');return false;}return {fisik,catatan:document.getElementById('rek-catatan')?.value||''};}}).then(res=>{if(!res.isConfirmed)return;Swal.fire({title:'Menyimpan...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});google.script.run.withSuccessHandler(resp=>{listRekonsiliasi.unshift({kas:kasType,saldoSistem:systemBalance,saldoFisik:res.value.fisik,selisih:Number(resp.selisih||res.value.fisik-systemBalance),catatan:res.value.catatan});renderLPJ();const d=Number(resp.selisih||0);Swal.fire({icon:Math.abs(d)<1?'success':'warning',title:Math.abs(d)<1?'Rekonsiliasi Seimbang':'Ada Selisih',text:`Selisih: ${formatRupiah(d)}`,timer:1800,showConfirmButton:false});}).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal',text:err?.message||'Rekonsiliasi gagal disimpan.'})).saveReconciliation(kasType,2026,systemBalance,res.value.fisik,res.value.catatan,authToken);});}
 
         function renderRoleSensitiveUI() {
@@ -1322,6 +1368,10 @@
             setRoleFromId('warga');
             auditLog = [];
             listRekonsiliasi = [];
+            invalidateLocalTransactionCache();
+            listPemasukanLain = [];
+            listPengeluaran = [];
+            __loadedTransactionScope = 'none';
             if (typeof google !== 'undefined' && google.script && google.script.run && token) {
                 google.script.run.logoutAdmin(token);
             }
@@ -1369,10 +1419,10 @@
             if (mainContent) mainContent.classList.toggle('layout-inner-scroll', tab === 'jimpitan' || tab === 'warga');
 
             if (tab === 'home') renderDashboard();
-            else if (tab === 'kas') renderLPJ();
+            else if (tab === 'kas') { renderLPJ(); ensureTransactionData('all', CURRENT_YEAR, renderLPJ); }
             else if (tab === 'warga') renderListWarga();
             else if (tab === 'rekap') renderRekapMatrix();
-            else if (tab === 'jimpitan') renderJimpitan();
+            else if (tab === 'jimpitan') { renderJimpitan(); ensureTransactionData('jimpitan', CURRENT_YEAR, renderJimpitan); }
             else if (tab === 'iuran') renderDataIuran();
         }
 
@@ -1436,6 +1486,8 @@
             link.remove();
         }
 
+        // Saat pengguna kembali dari WhatsApp/browser eksternal, pastikan shell aplikasi
+        // dirender kembali. Ini mencegah tampilan blank akibat lifecycle/bfcache mobile.
         function restoreAppAfterReturn() {
             try {
                 const app = document.getElementById('app-container');
@@ -1754,13 +1806,12 @@
     const nominalFormat = formatRupiah(Number(d.nominal) || 0);
     const labelKas = String(d.kasName || d.kasType || '-').toUpperCase();
 
-    // 🌟 GERBANG PEMISAH: Cek apakah ini Kwitansi Iuran Bulanan Warga asli
-    // Cirinya: Kolom 'nama' atau 'nrm' diisi data asli, atau jenis transaksi berupa 'IURAN'
+    
     const isKwitansiIuranWarga = (d.nama && d.nama !== '-') || jenisTransaksi === 'IURAN';
 
     if (isKwitansiIuranWarga) {
         
-		Swal.fire({
+        Swal.fire({
             title: '',
             width: '400px', // 👈 TAMBAHKAN INI (Mengatur lebar kotak SweetAlert2 agar ramping)
     customClass: {
@@ -1835,9 +1886,6 @@
         return; // Hentikan fungsi di sini agar tidak membaca kode luar iuran di bawah
     }
 
-    // ==========================================
-    //  DESAIN 2: DESAIN PADAT-RINGKAS KHUSUS TRANSAKSI LUAR IURAN (JIMPITAN/DONASI/PENGELUARAN)
-    // ==========================================
     let rawKeterangan = d.keterangan || '';
     let kategoriNota = d.kategori || '-';
     let metodeNota = d.metode || '-';
@@ -2214,7 +2262,6 @@
                 return;
             }
 
-            // Jika sedang edit gunakan ID lama agar menimpa baris lama di Google Sheets, jika baru buat ID baru
             const targetId = idEdit ? idEdit : 'M-' + new Date().getTime();
             
             const transObj = { 
@@ -2227,17 +2274,16 @@
             };
             
             if (idEdit) {
-                // SISI FRONTEND: Cari posisinya di array, lalu TIMPA datanya (Bukan push!)
+                
                 const index = listPemasukanLain.findIndex(item => item.id === idEdit);
                 if (index !== -1) {
                     listPemasukanLain[index] = transObj;
                 }
             } else {
-                // SISI FRONTEND: Masukkan data ke paling bawah array sebagai data baru
+                
                 listPemasukanLain.push(transObj);
             }
 
-            // SISI BACKEND: Kirim ke Google Apps Script (Ingat pastikan fungsi .gs Anda sudah diganti ke versi filter ID yang saya berikan sebelumnya agar baris Excel ter-update murni!)
             if (typeof google !== 'undefined' && google.script && google.script.run) {
                 google.script.run.saveTransaction('pemasukan', transObj, authToken);
             }
@@ -2250,7 +2296,6 @@
                 showConfirmButton: false 
             });
             
-            // Render ulang tampilan lokal agar Jimpitan dan Dashboard langsung sinkron.
             if (typeof renderJimpitan === 'function') renderJimpitan();
             if (typeof renderDashboard === 'function') renderDashboard();
             if (typeof updateAplikasiUI === 'function') {
@@ -2346,7 +2391,6 @@
     listKas.forEach(k => {
         const canEdit = perms[k.id];
 
-        // Hitung Pemasukan Iuran Bulanan (Hanya untuk Utama & Sosial)
         let masukIuran = 0;
         const iuranWargaList = [];
 
@@ -2379,7 +2423,6 @@
             });
         }
 
-        // Hitung Pemasukan Non-Iuran / Manual Input dari Spreadsheet
         let masukLain = 0;
         const pemasukanKas = listPemasukanLain.filter(m => String(m.kas).trim().toLowerCase() === k.id && String(m.status || 'ACTIVE').toUpperCase() !== 'VOID');
         pemasukanKas.forEach(m => masukLain += Number(m.nominal || 0));
@@ -2461,14 +2504,14 @@
                 `;
             }
 
-                        // 2. Kondisi Tombol Edit & Hapus: HANYA muncul jika BUKAN iuran otomatis warga, dan pengurus punya akses
+                        
             let actionButtons = '';
             if (!t.isIuranWarga && canEdit && stringId !== '') {
                 
                 // 🔥 SOLUSI SAKTI: Cek apakah transaksi ini milik kas jimpitan
                 const isJimpitan = String(t.kas).trim().toLowerCase() === 'jimpitan';
                 
-                // Jika kas jimpitan, panggil 'catatJimpitan', selain itu tetap panggil fungsi bawaan 'aksiEditTransaksi'
+                
                 const fungsiEdit = isJimpitan 
                     ? `catatJimpitan('${stringId}')` 
                     : `aksiEditTransaksi('${txTypeLower}', '${stringId}')`;
@@ -2628,7 +2671,7 @@
 
             if (typeof google !== 'undefined' && google.script && google.script.run) {
                 google.script.run
-                    .withSuccessHandler(() => { renderLPJ(); })
+                    .withSuccessHandler(() => { invalidateLocalTransactionCache(); renderLPJ(); })
                     .withFailureHandler(err => { console.error('saveTransaction pemasukan:', err); Swal.fire({ icon:'error', title:'Gagal Menyimpan', text:'Pemasukan gagal disimpan ke Google Sheets.' }); })
                     .saveTransaction('pemasukan', newObj, authToken);
             }
@@ -2711,7 +2754,7 @@ function openModalPengeluaran(kasType) {
 
             if (typeof google !== 'undefined' && google.script && google.script.run) {
                 google.script.run
-                    .withSuccessHandler(() => { renderLPJ(); })
+                    .withSuccessHandler(() => { invalidateLocalTransactionCache(); renderLPJ(); })
                     .withFailureHandler(err => { console.error('saveTransaction pengeluaran:', err); Swal.fire({ icon:'error', title:'Gagal Menyimpan', text:'Pengeluaran gagal disimpan ke Google Sheets.' }); })
                     .saveTransaction('pengeluaran', newObj, authToken);
             }
@@ -3300,7 +3343,7 @@ function eksekusiHapusTransaksiDariModal() {
     Swal.fire({title:'Membatalkan...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});
     if (typeof google !== 'undefined' && google.script && google.script.run) {
         google.script.run.withSuccessHandler(response=>{
-            if(response?.status==='success'){ const target=(type==='pemasukan'?listPemasukanLain:listPengeluaran).find(x=>String(x.id)===String(id)); if(target){ target.status='VOID'; target.voidReason=reason; } renderLPJ(); renderJimpitan(); Swal.fire({icon:'success',title:'Transaksi VOID',text:'Transaksi dibatalkan tanpa menghapus histori.',timer:1100,showConfirmButton:false}); }
+            if(response?.status==='success'){ invalidateLocalTransactionCache(); const target=(type==='pemasukan'?listPemasukanLain:listPengeluaran).find(x=>String(x.id)===String(id)); if(target){ target.status='VOID'; target.voidReason=reason; } renderLPJ(); renderJimpitan(); Swal.fire({icon:'success',title:'Transaksi VOID',text:'Transaksi dibatalkan tanpa menghapus histori.',timer:1100,showConfirmButton:false}); }
             else Swal.fire({icon:'warning',title:'Tidak Ada Perubahan',text:'Transaksi tidak ditemukan atau sudah VOID.'});
         }).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal Membatalkan',text:err?.message||'Transaksi gagal dibatalkan.'})).deleteTransaction(type,id,authToken,reason);
     }
