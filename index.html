@@ -946,64 +946,77 @@
             };
         }
 
-        // Jalankan saat pertama kali halaman dibuka
-        document.addEventListener('DOMContentLoaded', () => {
-            // Render data mock awal agar aplikasi tidak kosong berkedip
+        let __bootstrapInFlight = false;
+        let __refreshInFlight = false;
+
+        function applyInitialServerData(data) {
+            if (!data) return;
+            if (Array.isArray(data.warga)) dataWarga = data.warga.map(normalizeWargaStatus);
+            if (data.mockDB) mockDB = data.mockDB;
+            if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
+            if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
+            if (Array.isArray(data.agenda)) listAgenda = data.agenda;
+            if (data.saldoAwal) saldoAwalKas = { ...saldoAwalKas, ...data.saldoAwal };
+            if (Array.isArray(data.auditLog)) auditLog = data.auditLog;
+            if (data.periodLocks) periodLocks = data.periodLocks;
+            if (Array.isArray(data.rekonsiliasi)) listRekonsiliasi = data.rekonsiliasi;
+        }
+
+        // Satu request bootstrap: validasi sesi + data publik/admin.
+        function bootstrapApp() {
+            if (__bootstrapInFlight) return;
+            __bootstrapInFlight = true;
             initSelectWarga();
             switchMainTab('home');
-            
-            validateExistingSession();
 
-            // Ambil data asli dari Google Sheets
-            if (typeof google !== 'undefined' && google.script && google.script.run) {
-                google.script.run
-                    .withSuccessHandler(data => {
-                        if (data) {
-                            if (Array.isArray(data.warga)) dataWarga = data.warga.map(normalizeWargaStatus);
-                            if (data.mockDB) mockDB = data.mockDB;
-                            if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
-                            if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
-                            if (Array.isArray(data.agenda)) listAgenda = data.agenda;
-                            if (data.saldoAwal) saldoAwalKas = { ...saldoAwalKas, ...data.saldoAwal };
-                            if (Array.isArray(data.auditLog)) auditLog = data.auditLog;
-                            if (data.periodLocks) periodLocks = data.periodLocks;
-                            if (Array.isArray(data.rekonsiliasi)) listRekonsiliasi = data.rekonsiliasi;
-                            
-                            // Re-render ulang UI menggunakan data asli dari Sheets
-                            updateAplikasiUI();
-                        }
-                    })
-                    .withFailureHandler(err => console.error("Gagal memuat data awal:", err))
-                    .getInitialData();
+            if (!(typeof google !== 'undefined' && google.script && google.script.run)) {
+                __bootstrapInFlight = false;
+                return;
             }
-        });
 
-        // Fungsi untuk me-refresh data secara berkala / manual
+            google.script.run
+                .withSuccessHandler(resp => {
+                    __bootstrapInFlight = false;
+                    if (resp && resp.authenticated && resp.role) {
+                        setRoleFromId(resp.role);
+                    } else {
+                        authToken = '';
+                        sessionStorage.removeItem('eiuranAuthToken');
+                        setRoleFromId('warga');
+                    }
+                    applyInitialServerData(resp && resp.data ? resp.data : null);
+                    updateAplikasiUI();
+                })
+                .withFailureHandler(err => {
+                    __bootstrapInFlight = false;
+                    console.error('bootstrapApp:', err);
+                    // Tetap tampilkan UI lokal jika backend sedang lambat.
+                    updateAplikasiUI();
+                })
+                .bootstrapData(authToken);
+        }
+
+        document.addEventListener('DOMContentLoaded', bootstrapApp);
+
+        // Refresh manual / setelah aksi penting. Request paralel digabung supaya tidak menumpuk.
         function refreshDataFromServer() {
+            if (__refreshInFlight) return;
             if (!(typeof google !== 'undefined' && google.script && google.script.run)) return;
+            __refreshInFlight = true;
             const selectedWargaId = document.getElementById('select-warga')?.value || '';
-            
             const onSuccess = data => {
-                if (!data) return;
-                if (Array.isArray(data.warga)) dataWarga = data.warga.map(normalizeWargaStatus);
-                if (data.mockDB) mockDB = data.mockDB;
-                if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
-                if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
-                if (Array.isArray(data.agenda)) listAgenda = data.agenda;
-                if (data.saldoAwal) saldoAwalKas = { ...saldoAwalKas, ...data.saldoAwal };
-                if (data.periodLocks) periodLocks = data.periodLocks;
-                if (Array.isArray(data.auditLog)) auditLog = data.auditLog;
-                if (Array.isArray(data.rekonsiliasi)) listRekonsiliasi = data.rekonsiliasi;
-
+                __refreshInFlight = false;
+                applyInitialServerData(data);
                 updateAplikasiUI();
-
-                // Pertahankan warga yang sedang dipilih setelah refresh
                 const wargaSelect = document.getElementById('select-warga');
                 if (selectedWargaId && wargaSelect && [...wargaSelect.options].some(o => o.value === selectedWargaId)) {
                     wargaSelect.value = selectedWargaId;
                 }
             };
-            const onFailure = err => console.error('refreshDataFromServer:', err);
+            const onFailure = err => {
+                __refreshInFlight = false;
+                console.error('refreshDataFromServer:', err);
+            };
             const runner = google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onFailure);
             if (authToken && ROLES[currentRoleIndex]?.id !== 'warga') runner.getAdminInitialData(authToken);
             else runner.getInitialData();
@@ -1012,7 +1025,6 @@
         // Fungsi Central untuk merender ulang UI berdasarkan tab aktif
         function updateAplikasiUI() {
             initSelectWarga();
-            if (ROLES[currentRoleIndex]?.id === 'super_admin') refreshAuditLogQuietly();
             if (currentMainTab === 'home') {
                 renderDashboard();
             } else if (currentMainTab === 'kas') {
@@ -1039,7 +1051,6 @@
             const icon = btn.querySelector('i');
             if (icon) icon.className = `fas ${role.icon}`;
             renderRoleSensitiveUI();
-            refreshAuditLogQuietly();
         }
 
         function toggleRole() {
@@ -1240,17 +1251,18 @@
             Swal.fire({ title: 'Admin Verification...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
             google.script.run
                 .withSuccessHandler(resp => {
-                    authToken = resp.token;
+                    const login = resp?.login || resp;
+                    authToken = login.token;
                     sessionStorage.setItem('eiuranAuthToken', authToken);
-                    setRoleFromId(resp.role);
-                    refreshDataFromServer();
-                    refreshAuditLogQuietly();
-                    Swal.fire({ icon: 'success', title: 'Login Successful', text: `Log in as ${ROLE_LABELS[resp.role]}.`, timer: 1200, showConfirmButton: false });
+                    setRoleFromId(login.role);
+                    applyInitialServerData(resp?.data || null);
+                    updateAplikasiUI();
+                    Swal.fire({ icon: 'success', title: 'Login Successful', text: `Log in as ${ROLE_LABELS[login.role]}.`, timer: 900, showConfirmButton: false });
                 })
                 .withFailureHandler(err => {
                     Swal.fire({ icon: 'error', title: 'Login Gagal', text: err?.message || 'Password atau role tidak valid.' });
                 })
-                .loginAdmin(role, password);
+                .loginAdminAndBootstrap(role, password);
         }
 
         function openDeveloperLoginModal() {
@@ -1322,30 +1334,12 @@
             if (typeof google !== 'undefined' && google.script && google.script.run && token) {
                 google.script.run.logoutAdmin(token);
             }
+            updateAplikasiUI();
             refreshDataFromServer();
             Swal.fire({ icon: 'success', title: 'Logout', text: 'Sesi admin telah ditutup.', timer: 1000, showConfirmButton: false });
         }
 
-        function validateExistingSession() {
-            if (!authToken || !(typeof google !== 'undefined' && google.script && google.script.run)) return;
-            google.script.run
-                .withSuccessHandler(resp => {
-                    if (resp && resp.authenticated) {
-                        setRoleFromId(resp.role);
-                        refreshDataFromServer();
-                    } else {
-                        authToken = '';
-                        sessionStorage.removeItem('eiuranAuthToken');
-                        setRoleFromId('warga');
-                    }
-                })
-                .withFailureHandler(() => {
-                    authToken = '';
-                    sessionStorage.removeItem('eiuranAuthToken');
-                    setRoleFromId('warga');
-                })
-                .getAuthSession(authToken);
-        }
+        function validateExistingSession() { bootstrapApp(); }
 
         function showAksesDitolak(msg) {
             Swal.fire({ icon: 'error', title: 'Akses Ditolak', text: msg || 'Role Anda tidak memiliki wewenang untuk aksi ini.', customClass: { popup: 'rounded-2xl', confirmButton: 'rounded-xl text-xs font-bold px-4 py-2 bg-slate-800' } });
@@ -2651,7 +2645,7 @@
 
             if (typeof google !== 'undefined' && google.script && google.script.run) {
                 google.script.run
-                    .withSuccessHandler(() => { refreshDataFromServer(); })
+                    .withSuccessHandler(() => { renderLPJ(); })
                     .withFailureHandler(err => { console.error('saveTransaction pemasukan:', err); Swal.fire({ icon:'error', title:'Gagal Menyimpan', text:'Pemasukan gagal disimpan ke Google Sheets.' }); })
                     .saveTransaction('pemasukan', newObj, authToken);
             }
@@ -2734,7 +2728,7 @@ function openModalPengeluaran(kasType) {
 
             if (typeof google !== 'undefined' && google.script && google.script.run) {
                 google.script.run
-                    .withSuccessHandler(() => { refreshDataFromServer(); })
+                    .withSuccessHandler(() => { renderLPJ(); })
                     .withFailureHandler(err => { console.error('saveTransaction pengeluaran:', err); Swal.fire({ icon:'error', title:'Gagal Menyimpan', text:'Pengeluaran gagal disimpan ke Google Sheets.' }); })
                     .saveTransaction('pengeluaran', newObj, authToken);
             }
@@ -3323,7 +3317,7 @@ function eksekusiHapusTransaksiDariModal() {
     Swal.fire({title:'Membatalkan...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});
     if (typeof google !== 'undefined' && google.script && google.script.run) {
         google.script.run.withSuccessHandler(response=>{
-            if(response?.status==='success'){ refreshDataFromServer(); Swal.fire({icon:'success',title:'Transaksi VOID',text:'Transaksi dibatalkan tanpa menghapus histori.',timer:1400,showConfirmButton:false}); }
+            if(response?.status==='success'){ const target=(type==='pemasukan'?listPemasukanLain:listPengeluaran).find(x=>String(x.id)===String(id)); if(target){ target.status='VOID'; target.voidReason=reason; } renderLPJ(); renderJimpitan(); Swal.fire({icon:'success',title:'Transaksi VOID',text:'Transaksi dibatalkan tanpa menghapus histori.',timer:1100,showConfirmButton:false}); }
             else Swal.fire({icon:'warning',title:'Tidak Ada Perubahan',text:'Transaksi tidak ditemukan atau sudah VOID.'});
         }).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal Membatalkan',text:err?.message||'Transaksi gagal dibatalkan.'})).deleteTransaction(type,id,authToken,reason);
     }
