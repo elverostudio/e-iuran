@@ -614,9 +614,18 @@
                             <h3 id="card-warga-name" class="text-lg font-black tracking-wider leading-tight">AGUNG WICAKSONO</h3>
                             <p id="card-warga-nrm" class="text-xs font-medium opacity-90"> 00104 • Aktif</p>
                         </div>
-                        <div class="text-right">
+                        <div class="text-right min-w-[122px]">
                             <p class="text-[9px] opacity-75 uppercase tracking-wider mb-0.5">Total Terbayar</p>
                             <p id="card-total-paid" class="text-lg font-black drop-shadow">Rp 0</p>
+                            <div class="mt-1.5">
+                                <div class="flex items-center justify-end gap-1.5">
+                                    <span id="card-progress-percent" class="text-[12px] font-black">0%</span>
+                                    <span id="card-progress-count" class="text-[9px] font-bold opacity-80">0/12 bulan</span>
+                                </div>
+                                <div class="w-full h-1.5 rounded-full bg-white/20 overflow-hidden mt-1">
+                                    <div id="card-progress-bar" class="h-full rounded-full bg-white transition-all duration-300" style="width:0%"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -851,6 +860,7 @@
         ];
 
         let mockDB = { utama: {}, sosial: {} };
+        let iuranDates = { utama: {}, sosial: {} };
 
         let listPemasukanLain = [];
 
@@ -928,6 +938,7 @@
             if (!data) return;
             if (Array.isArray(data.warga)) dataWarga = data.warga.map(normalizeWargaStatus);
             if (data.mockDB) mockDB = data.mockDB;
+            if (data.iuranDates) iuranDates = data.iuranDates;
             if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
             if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
             if (Array.isArray(data.agenda)) listAgenda = data.agenda;
@@ -1467,6 +1478,23 @@
             });
         }
 
+        function getLocalDateOnly() {
+            const now = new Date();
+            return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+        }
+
+        function formatDateOnlyDisplay(value) {
+            const s = String(value || '').trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+            const [y,m,d] = s.split('-').map(Number);
+            const date = new Date(y, m - 1, d);
+            return isNaN(date.getTime()) ? '' : date.toLocaleDateString('id-ID', {day:'2-digit', month:'short', year:'numeric'});
+        }
+
+        function getIuranPaymentDate(kasType, key, monthId) {
+            return String(iuranDates?.[kasType]?.[key]?.[String(Number(monthId))] || '').trim();
+        }
+
         function renderDataIuran() {
             const wargaId = document.getElementById('select-warga').value;
             const tahun = parseInt(document.getElementById('select-tahun').value);
@@ -1481,6 +1509,15 @@
 
             const totalPaid = paidMonths.length * theme.nominal;
             document.getElementById('card-total-paid').textContent = formatRupiah(totalPaid);
+
+            const paidCount = paidMonths.length;
+            const paidPercent = Math.round((paidCount / 12) * 100);
+            const progressPercentEl = document.getElementById('card-progress-percent');
+            const progressCountEl = document.getElementById('card-progress-count');
+            const progressBarEl = document.getElementById('card-progress-bar');
+            if (progressPercentEl) progressPercentEl.textContent = `${paidPercent}%`;
+            if (progressCountEl) progressCountEl.textContent = `${paidCount}/12 bulan`;
+            if (progressBarEl) progressBarEl.style.width = `${paidPercent}%`;
 
             const badge = document.getElementById('badge-progress');
             if (paidMonths.length === 12) {
@@ -1511,6 +1548,8 @@
                 if (isPaid) {
                     dotColor = `${theme.paidColor} border-white shadow-sm ring-4 ring-${theme.paidColor}/20`;
                     cardStyle = `${theme.paidBg}`;
+                    const paymentKey = `${document.getElementById('select-warga')?.value || ''}_${tahun}`;
+                    const paymentDate = getIuranPaymentDate(currentActiveKas, paymentKey, month.id);
                     statusBadge = `<span class="text-[9px] font-black px-2 py-0.5 rounded uppercase ${theme.paidText} bg-white shadow-xs"><i class="fas fa-check-circle mr-1"></i>Lunas</span>`;
                     actionBtn = `<div class="flex items-center gap-1">
                         <button onclick="cetakKuitansi('${month.name}', ${tahun})" class="h-8 w-8 rounded-full bg-white flex items-center justify-center text-slate-500 border border-slate-200 hover:bg-slate-50 shadow-xs" title="Unduh Kwitansi PNG"><i class="fas fa-receipt text-xs"></i></button>
@@ -1548,6 +1587,7 @@
                                     ${statusBadge}
                                 </div>
                                 <p class="text-xs font-bold text-slate-500">${formatRupiah(theme.nominal)}</p>
+                                ${isPaid && paymentDate ? `<p class="text-[9px] font-semibold text-slate-400 mt-0.5"><i class="far fa-calendar mr-1"></i>Dibayar ${formatDateOnlyDisplay(paymentDate)}</p>` : ''}
                             </div>
                             <div>${actionBtn}</div>
                         </div>
@@ -1600,9 +1640,11 @@
                         google.script.run.withSuccessHandler(()=>{
                             if (!mockDB[currentActiveKas][key]) mockDB[currentActiveKas][key]=[];
                             mockDB[currentActiveKas][key]=nextPaid;
+                            if (!iuranDates[currentActiveKas][key]) iuranDates[currentActiveKas][key] = {};
+                            iuranDates[currentActiveKas][key][String(monthId)] = getLocalDateOnly();
                             Swal.fire({icon:'success',title:'Pembayaran Sukses!',text:'Kwitansi digital otomatis diterbitkan.',confirmButtonColor:'#1e293b',confirmButtonText:'Lihat Kwitansi',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2'}}).then(()=>cetakKuitansi(monthName,tahun));
                             renderDataIuran();
-                        }).withFailureHandler(err=>Swal.fire({icon:'error',title:'Pembayaran Ditolak',text:err?.message||'Iuran gagal disimpan.'})).saveIuran(currentActiveKas,key,nextPaid,authToken);
+                        }).withFailureHandler(err=>Swal.fire({icon:'error',title:'Pembayaran Ditolak',text:err?.message||'Iuran gagal disimpan.'})).saveIuran(currentActiveKas,key,nextPaid,authToken,monthId,getLocalDateOnly());
                     } else { mockDB[currentActiveKas][key]=nextPaid; renderDataIuran(); Swal.fire({icon:'success',title:'Pembayaran Sukses',timer:900,showConfirmButton:false}); }
                 }
             });
@@ -1649,6 +1691,9 @@
                         if (mockDB[currentActiveKas]?.[key]) {
                             mockDB[currentActiveKas][key] = mockDB[currentActiveKas][key].filter(m => Number(m) !== Number(monthId));
                         }
+                        if (iuranDates[currentActiveKas]?.[key]) {
+                            delete iuranDates[currentActiveKas][key][String(monthId)];
+                        }
                         renderDataIuran();
                         if (currentMainTab === 'rekap') renderRekapMatrix();
                         Swal.fire({ icon: 'success', title: 'Iuran Dihapus', text: `${monthName} ${tahun} kembali berstatus belum lunas.`, timer: 1400, showConfirmButton: false });
@@ -1674,6 +1719,7 @@
                 kasName: String(data.kasName || '-'),
                 nominal: Number(data.nominal || 0),
                 periodeLabel: String(data.periodeLabel || '-'),
+                tanggalBayar: String(data.tanggalBayar || ''),
                 refNo: String(data.refNo || ('KUT-' + Date.now().toString().slice(-6))),
                 tanggalVerifikasi: String(data.tanggalVerifikasi || new Date().toLocaleDateString('id-ID', { day:'numeric', month:'short', year:'numeric' })),
                 keterangan: String(data.keterangan || ''),
@@ -1704,6 +1750,7 @@
                             ${r.nrm !== '-' ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Nrm:</span><span style="font-weight:700;color:#475569;text-align:right;">${escapeReceiptText(r.nrm)}</span></div>` : ''}
                             <div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Jenis Kas:</span><span style="font-weight:800;color:#0f172a;text-align:right;">${escapeReceiptText(r.kasName)}</span></div>
                             <div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">${r.jenis === 'IURAN' ? 'Periode' : 'Tanggal'}:</span><span style="font-weight:800;color:#0f172a;text-align:right;">${escapeReceiptText(periodeLabel)}</span></div>
+                            ${r.jenis === 'IURAN' && r.tanggalBayar ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Tanggal Bayar:</span><span style="font-weight:800;color:#0f172a;text-align:right;">${escapeReceiptText(formatDateOnlyDisplay(r.tanggalBayar))}</span></div>` : ''}
                             ${r.kategori ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Kategori:</span><span style="font-weight:700;color:#475569;text-align:right;">${escapeReceiptText(r.kategori)}</span></div>` : ''}
                             ${r.metode ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Metode:</span><span style="font-weight:700;color:#475569;text-align:right;">${escapeReceiptText(r.metode)}</span></div>` : ''}
                             ${r.keterangan ? `<div style="margin-top:8px;padding-top:7px;border-top:1px solid #f1f5f9;"><div style="color:#64748b;">Keterangan:</div><div style="font-weight:700;color:#475569;margin-top:2px;">${escapeReceiptText(r.keterangan)}</div></div>` : ''}
@@ -1915,6 +1962,7 @@
                 kasName: theme.name,
                 nominal: theme.nominal,
                 periodeLabel: `${monthName} ${tahun}`,
+                tanggalBayar: getIuranPaymentDate(currentActiveKas, `${warga.id}_${tahun}`, (MONTHS.find(m => m.name === monthName) || {}).id || 0),
                 refNo: 'KU-' + Date.now().toString().slice(-6)
             });
         }
