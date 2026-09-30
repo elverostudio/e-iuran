@@ -68,6 +68,22 @@
         .dashboard-iuran-ring.sosial > span {
             color: #064e3b;
         }
+
+        .iuran-card-progress-track {
+            height: 6px;
+            border-radius: 9999px;
+            background: rgba(255,255,255,.24);
+            overflow: hidden;
+            box-shadow: inset 0 1px 2px rgba(15,23,42,.18);
+        }
+        .iuran-card-progress-bar {
+            height: 100%;
+            border-radius: inherit;
+            width: 0%;
+            background: rgba(255,255,255,.96);
+            box-shadow: 0 0 10px rgba(255,255,255,.28);
+            transition: width .35s ease;
+        }
         @media (prefers-reduced-motion: reduce) {
             .dashboard-stat { transition: none; }
             .dashboard-stat:active { transform: none; }
@@ -221,7 +237,7 @@
     <script>
         window.EIURAN_API_URL = window.EIURAN_API_URL ||
             (window.EIURAN_CONFIG && window.EIURAN_CONFIG.apiUrl) ||
-            'https://script.google.com/macros/s/AKfycbzXLxxEMxljD4c9fx_rv8HUucSD50JxNHXqCd55PFaUB3BbL57xTKm-p8oSqsiaMQ/exec';
+            'https://script.google.com/macros/s/AKfycby4dS0zzvqfzSq-1SZbmRWhxRt_pCO_M8OQYDZOK6TKCuX6kEzd4IPU0YM9aC7jdfAo/exec';
 
         (function installEiuranGasCompatibilityBridge() {
             const nativeGasRunnerExists =
@@ -614,18 +630,19 @@
                             <h3 id="card-warga-name" class="text-lg font-black tracking-wider leading-tight">AGUNG WICAKSONO</h3>
                             <p id="card-warga-nrm" class="text-xs font-medium opacity-90"> 00104 • Aktif</p>
                         </div>
-                        <div class="text-right min-w-[122px]">
+                        <div class="text-right">
                             <p class="text-[9px] opacity-75 uppercase tracking-wider mb-0.5">Total Terbayar</p>
                             <p id="card-total-paid" class="text-lg font-black drop-shadow">Rp 0</p>
-                            <div class="mt-1.5">
-                                <div class="flex items-center justify-end gap-1.5">
-                                    <span id="card-progress-percent" class="text-[12px] font-black">0%</span>
-                                    <span id="card-progress-count" class="text-[9px] font-bold opacity-80">0/12 bulan</span>
-                                </div>
-                                <div class="w-full h-1.5 rounded-full bg-white/20 overflow-hidden mt-1">
-                                    <div id="card-progress-bar" class="h-full rounded-full bg-white transition-all duration-300" style="width:0%"></div>
-                                </div>
-                            </div>
+                        </div>
+                    </div>
+
+                    <div class="relative z-10 mt-4 pt-3 border-t border-white/15">
+                        <div class="flex items-center justify-between mb-1.5 gap-2">
+                            <span class="text-[9px] font-bold uppercase tracking-wider opacity-75">Progres Iuran Tahunan</span>
+                            <span id="card-iuran-progress-text" class="text-[10px] font-black">0/12 • 0%</span>
+                        </div>
+                        <div class="iuran-card-progress-track">
+                            <div id="card-iuran-progress-bar" class="iuran-card-progress-bar"></div>
                         </div>
                     </div>
                 </div>
@@ -860,7 +877,7 @@
         ];
 
         let mockDB = { utama: {}, sosial: {} };
-        let iuranDates = { utama: {}, sosial: {} };
+        let iuranTanggal = { utama: {}, sosial: {} };
 
         let listPemasukanLain = [];
 
@@ -938,7 +955,7 @@
             if (!data) return;
             if (Array.isArray(data.warga)) dataWarga = data.warga.map(normalizeWargaStatus);
             if (data.mockDB) mockDB = data.mockDB;
-            if (data.iuranDates) iuranDates = data.iuranDates;
+            if (data.iuranTanggal) iuranTanggal = data.iuranTanggal;
             if (Array.isArray(data.pemasukan)) listPemasukanLain = data.pemasukan;
             if (Array.isArray(data.pengeluaran)) listPengeluaran = data.pengeluaran;
             if (Array.isArray(data.agenda)) listAgenda = data.agenda;
@@ -1478,23 +1495,6 @@
             });
         }
 
-        function getLocalDateOnly() {
-            const now = new Date();
-            return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-        }
-
-        function formatDateOnlyDisplay(value) {
-            const s = String(value || '').trim();
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
-            const [y,m,d] = s.split('-').map(Number);
-            const date = new Date(y, m - 1, d);
-            return isNaN(date.getTime()) ? '' : date.toLocaleDateString('id-ID', {day:'2-digit', month:'short', year:'numeric'});
-        }
-
-        function getIuranPaymentDate(kasType, key, monthId) {
-            return String(iuranDates?.[kasType]?.[key]?.[String(Number(monthId))] || '').trim();
-        }
-
         function renderDataIuran() {
             const wargaId = document.getElementById('select-warga').value;
             const tahun = parseInt(document.getElementById('select-tahun').value);
@@ -1507,17 +1507,15 @@
             const key = `${wargaId}_${tahun}`;
             const paidMonths = mockDB[currentActiveKas][key] || [];
 
-            const totalPaid = paidMonths.length * theme.nominal;
+            const uniquePaidMonths = [...new Set((Array.isArray(paidMonths) ? paidMonths : []).map(Number).filter(m => m >= 1 && m <= 12))];
+            const totalPaid = uniquePaidMonths.length * theme.nominal;
+            const progressPercent = Math.round((uniquePaidMonths.length / 12) * 1000) / 10;
             document.getElementById('card-total-paid').textContent = formatRupiah(totalPaid);
 
-            const paidCount = paidMonths.length;
-            const paidPercent = Math.round((paidCount / 12) * 100);
-            const progressPercentEl = document.getElementById('card-progress-percent');
-            const progressCountEl = document.getElementById('card-progress-count');
-            const progressBarEl = document.getElementById('card-progress-bar');
-            if (progressPercentEl) progressPercentEl.textContent = `${paidPercent}%`;
-            if (progressCountEl) progressCountEl.textContent = `${paidCount}/12 bulan`;
-            if (progressBarEl) progressBarEl.style.width = `${paidPercent}%`;
+            const progressText = document.getElementById('card-iuran-progress-text');
+            const progressBar = document.getElementById('card-iuran-progress-bar');
+            if (progressText) progressText.textContent = `${uniquePaidMonths.length}/12 • ${progressPercent}%`;
+            if (progressBar) progressBar.style.width = `${Math.min(100, Math.max(0, progressPercent))}%`;
 
             const badge = document.getElementById('badge-progress');
             if (paidMonths.length === 12) {
@@ -1528,7 +1526,7 @@
                 badge.innerHTML = `${paidMonths.length}/12 Lunas`;
             }
 
-            renderTimeline(paidMonths, tahun, theme);
+            renderTimeline(uniquePaidMonths, tahun, theme);
         }
 
         function renderTimeline(paidMonths, tahun, theme) {
@@ -1548,8 +1546,6 @@
                 if (isPaid) {
                     dotColor = `${theme.paidColor} border-white shadow-sm ring-4 ring-${theme.paidColor}/20`;
                     cardStyle = `${theme.paidBg}`;
-                    const paymentKey = `${document.getElementById('select-warga')?.value || ''}_${tahun}`;
-                    const paymentDate = getIuranPaymentDate(currentActiveKas, paymentKey, month.id);
                     statusBadge = `<span class="text-[9px] font-black px-2 py-0.5 rounded uppercase ${theme.paidText} bg-white shadow-xs"><i class="fas fa-check-circle mr-1"></i>Lunas</span>`;
                     actionBtn = `<div class="flex items-center gap-1">
                         <button onclick="cetakKuitansi('${month.name}', ${tahun})" class="h-8 w-8 rounded-full bg-white flex items-center justify-center text-slate-500 border border-slate-200 hover:bg-slate-50 shadow-xs" title="Unduh Kwitansi PNG"><i class="fas fa-receipt text-xs"></i></button>
@@ -1587,7 +1583,6 @@
                                     ${statusBadge}
                                 </div>
                                 <p class="text-xs font-bold text-slate-500">${formatRupiah(theme.nominal)}</p>
-                                ${isPaid && paymentDate ? `<p class="text-[9px] font-semibold text-slate-400 mt-0.5"><i class="far fa-calendar mr-1"></i>Dibayar ${formatDateOnlyDisplay(paymentDate)}</p>` : ''}
                             </div>
                             <div>${actionBtn}</div>
                         </div>
@@ -1614,10 +1609,14 @@
             Swal.fire({
                 title: 'Konfirmasi Pembayaran',
                 html: `
-                    <div class="text-xs mt-2 text-left bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-1.5">
+                    <div class="text-xs mt-2 text-left bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
                         <p><span class="text-slate-500">Jenis Iuran:</span> <br><strong class="text-slate-800">${theme.name}</strong></p>
                         <p><span class="text-slate-500">Periode:</span> <br><strong class="text-slate-800">${monthName} ${tahun}</strong></p>
                         <p><span class="text-slate-500">Nama Warga:</span> <br><strong class="text-slate-800">${warga.nama.toUpperCase()}</strong></p>
+                        <div class="pt-2 border-t border-slate-200">
+                            <label class="text-slate-500 block mb-1">Tanggal Transaksi:</label>
+                            <input type="date" id="tanggal-transaksi-iuran" value="${new Date().toISOString().slice(0,10)}" class="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
                         <p class="pt-2 border-t border-slate-200"><span class="text-slate-500">Nominal Tagihan:</span> <br><strong class="text-base text-blue-600">${formatRupiah(theme.nominal)}</strong></p>
                     </div>
                 `,
@@ -1630,6 +1629,11 @@
                 customClass: { popup: 'rounded-2xl', confirmButton: 'rounded-xl text-xs font-bold px-4 py-2', cancelButton: 'rounded-xl text-xs font-bold px-4 py-2' }
             }).then((result) => {
                 if (result.isConfirmed) {
+                    const tanggalTransaksi = document.getElementById('tanggal-transaksi-iuran')?.value || new Date().toISOString().slice(0,10);
+                    if (!tanggalTransaksi) {
+                        Swal.fire({ icon:'warning', title:'Tanggal Transaksi Wajib', text:'Pilih tanggal transaksi sebelum menyimpan pembayaran.' });
+                        return;
+                    }
                     Swal.fire({ title: 'Memproses...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
                     
                     const key = `${wargaId}_${tahun}`;
@@ -1640,11 +1644,9 @@
                         google.script.run.withSuccessHandler(()=>{
                             if (!mockDB[currentActiveKas][key]) mockDB[currentActiveKas][key]=[];
                             mockDB[currentActiveKas][key]=nextPaid;
-                            if (!iuranDates[currentActiveKas][key]) iuranDates[currentActiveKas][key] = {};
-                            iuranDates[currentActiveKas][key][String(monthId)] = getLocalDateOnly();
                             Swal.fire({icon:'success',title:'Pembayaran Sukses!',text:'Kwitansi digital otomatis diterbitkan.',confirmButtonColor:'#1e293b',confirmButtonText:'Lihat Kwitansi',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2'}}).then(()=>cetakKuitansi(monthName,tahun));
                             renderDataIuran();
-                        }).withFailureHandler(err=>Swal.fire({icon:'error',title:'Pembayaran Ditolak',text:err?.message||'Iuran gagal disimpan.'})).saveIuran(currentActiveKas,key,nextPaid,authToken,monthId,getLocalDateOnly());
+                        }).withFailureHandler(err=>Swal.fire({icon:'error',title:'Pembayaran Ditolak',text:err?.message||'Iuran gagal disimpan.'})).saveIuran(currentActiveKas,key,nextPaid,authToken,tanggalTransaksi);
                     } else { mockDB[currentActiveKas][key]=nextPaid; renderDataIuran(); Swal.fire({icon:'success',title:'Pembayaran Sukses',timer:900,showConfirmButton:false}); }
                 }
             });
@@ -1691,9 +1693,6 @@
                         if (mockDB[currentActiveKas]?.[key]) {
                             mockDB[currentActiveKas][key] = mockDB[currentActiveKas][key].filter(m => Number(m) !== Number(monthId));
                         }
-                        if (iuranDates[currentActiveKas]?.[key]) {
-                            delete iuranDates[currentActiveKas][key][String(monthId)];
-                        }
                         renderDataIuran();
                         if (currentMainTab === 'rekap') renderRekapMatrix();
                         Swal.fire({ icon: 'success', title: 'Iuran Dihapus', text: `${monthName} ${tahun} kembali berstatus belum lunas.`, timer: 1400, showConfirmButton: false });
@@ -1719,8 +1718,8 @@
                 kasName: String(data.kasName || '-'),
                 nominal: Number(data.nominal || 0),
                 periodeLabel: String(data.periodeLabel || '-'),
-                tanggalBayar: String(data.tanggalBayar || ''),
                 refNo: String(data.refNo || ('KUT-' + Date.now().toString().slice(-6))),
+                tanggalTransaksi: String(data.tanggalTransaksi || ''),
                 tanggalVerifikasi: String(data.tanggalVerifikasi || new Date().toLocaleDateString('id-ID', { day:'numeric', month:'short', year:'numeric' })),
                 keterangan: String(data.keterangan || ''),
                 metode: String(data.metode || ''),
@@ -1750,7 +1749,7 @@
                             ${r.nrm !== '-' ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Nrm:</span><span style="font-weight:700;color:#475569;text-align:right;">${escapeReceiptText(r.nrm)}</span></div>` : ''}
                             <div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Jenis Kas:</span><span style="font-weight:800;color:#0f172a;text-align:right;">${escapeReceiptText(r.kasName)}</span></div>
                             <div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">${r.jenis === 'IURAN' ? 'Periode' : 'Tanggal'}:</span><span style="font-weight:800;color:#0f172a;text-align:right;">${escapeReceiptText(periodeLabel)}</span></div>
-                            ${r.jenis === 'IURAN' && r.tanggalBayar ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Tanggal Bayar:</span><span style="font-weight:800;color:#0f172a;text-align:right;">${escapeReceiptText(formatDateOnlyDisplay(r.tanggalBayar))}</span></div>` : ''}
+                            ${r.jenis === 'IURAN' && r.tanggalTransaksi ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Tanggal Transaksi:</span><span style="font-weight:800;color:#0f172a;text-align:right;">${escapeReceiptText(r.tanggalTransaksi)}</span></div>` : ''}
                             ${r.kategori ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Kategori:</span><span style="font-weight:700;color:#475569;text-align:right;">${escapeReceiptText(r.kategori)}</span></div>` : ''}
                             ${r.metode ? `<div style="display:flex;justify-content:space-between;gap:12px;margin:3px 0;"><span style="color:#64748b;">Metode:</span><span style="font-weight:700;color:#475569;text-align:right;">${escapeReceiptText(r.metode)}</span></div>` : ''}
                             ${r.keterangan ? `<div style="margin-top:8px;padding-top:7px;border-top:1px solid #f1f5f9;"><div style="color:#64748b;">Keterangan:</div><div style="font-weight:700;color:#475569;margin-top:2px;">${escapeReceiptText(r.keterangan)}</div></div>` : ''}
@@ -1815,6 +1814,10 @@
                         <div class="flex justify-between">
                             <span class="text-slate-400 font-medium">Periode Bulan:</span>
                             <span class="font-bold text-slate-800">${d.periodeLabel || '-'}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400 font-medium">Tanggal Transaksi:</span>
+                            <span class="font-bold text-slate-800">${d.tanggalTransaksi || '-'}</span>
                         </div>
                         <!-- Baris tambahan bawaan iuran Anda yang dulu sempat hilang -->
                         <div class="flex justify-between pt-2 border-t border-slate-100">
@@ -1953,6 +1956,11 @@
                 Swal.fire({ icon:'error', title:'Gagal', text:'Data warga atau jenis kas tidak ditemukan.' });
                 return;
             }
+            const monthInfo = MONTHS.find(m => String(m.name).toLowerCase() === String(monthName).toLowerCase());
+            const tanggalTransaksi = monthInfo
+                ? (iuranTanggal?.[currentActiveKas]?.[`${warga.id}_${tahun}`]?.[String(monthInfo.id)] || '')
+                : '';
+
             showKwitansiDigital({
                 jenis: 'IURAN',
                 wargaId: warga.id,
@@ -1962,7 +1970,7 @@
                 kasName: theme.name,
                 nominal: theme.nominal,
                 periodeLabel: `${monthName} ${tahun}`,
-                tanggalBayar: getIuranPaymentDate(currentActiveKas, `${warga.id}_${tahun}`, (MONTHS.find(m => m.name === monthName) || {}).id || 0),
+                tanggalTransaksi,
                 refNo: 'KU-' + Date.now().toString().slice(-6)
             });
         }
@@ -2375,11 +2383,16 @@
                         if (matchMonth) namaBln = matchMonth.name;
                     }
 
+                    const keyIuran = w.id + '_2026';
+                    const storedTanggal = iuranTanggal?.[k.id]?.[keyIuran]?.[String(bln)] || '';
                     const padBulan = String(bln).length < 2 ? '0' + bln : bln;
+                    // Kompatibilitas data lama: bila tanggal transaksi belum pernah tersimpan,
+                    // tampilkan '-' agar tidak mengarang tanggal transaksi.
+                    const tanggalIuran = storedTanggal || '-';
 
                     iuranWargaList.push({
                         id: w.id + '_' + bln,
-                        tanggal: '2026-' + padBulan + '-01',
+                        tanggal: tanggalIuran,
                         kas: k.id,
                         ket: 'Iuran ' + k.title + ' - ' + w.nama + ' (' + namaBln + ' 2026)',
                         nominal: Number(THEMES[k.id].nominal) || 0,
