@@ -1641,11 +1641,32 @@
                     if (!nextPaid.includes(monthId)) nextPaid.push(monthId);
                     nextPaid.sort((a, b) => a - b);
                     if (typeof google !== 'undefined' && google.script && google.script.run) {
-                        google.script.run.withSuccessHandler(()=>{
+                        google.script.run.withSuccessHandler((resp)=>{
                             if (!mockDB[currentActiveKas][key]) mockDB[currentActiveKas][key]=[];
                             mockDB[currentActiveKas][key]=nextPaid;
-                            Swal.fire({icon:'success',title:'Pembayaran Sukses!',text:'Kwitansi digital otomatis diterbitkan.',confirmButtonColor:'#1e293b',confirmButtonText:'Lihat Kwitansi',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2'}}).then(()=>cetakKuitansi(monthName,tahun));
+
+                            // Sinkronkan state frontend SEGERA setelah backend berhasil menyimpan tanggal.
+                            // Ini mencegah kwitansi/riwayat harus menunggu refresh halaman.
+                            if (!iuranTanggal[currentActiveKas]) iuranTanggal[currentActiveKas] = {};
+                            if (!iuranTanggal[currentActiveKas][key]) iuranTanggal[currentActiveKas][key] = {};
+                            const savedDate = String(resp?.transactionDate || tanggalTransaksi || '');
+                            const savedMonths = Array.isArray(resp?.newlyPaid) && resp.newlyPaid.length ? resp.newlyPaid : [Number(monthId)];
+                            savedMonths.forEach(m => {
+                                if (m) iuranTanggal[currentActiveKas][key][String(m)] = savedDate;
+                            });
+
+                            // Render lokal lebih dulu agar UI langsung berubah tanpa menunggu request kedua.
                             renderDataIuran();
+                            if (typeof renderLPJ === 'function') renderLPJ();
+
+                            // Setelah UI lokal tersinkron, ambil bootstrap terbaru untuk memastikan
+                            // state frontend sama persis dengan database di server.
+                            refreshDataFromServer();
+
+                            // Kwitansi dibuka memakai state tanggal yang BARU saja disimpan.
+                            Swal.fire({icon:'success',title:'Pembayaran Sukses!',text:'Kwitansi digital otomatis diterbitkan.',confirmButtonColor:'#1e293b',confirmButtonText:'Lihat Kwitansi',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2'}}).then(()=>{
+                                cetakKuitansi(monthName,tahun);
+                            });
                         }).withFailureHandler(err=>Swal.fire({icon:'error',title:'Pembayaran Ditolak',text:err?.message||'Iuran gagal disimpan.'})).saveIuran(currentActiveKas,key,nextPaid,authToken,tanggalTransaksi);
                     } else { mockDB[currentActiveKas][key]=nextPaid; renderDataIuran(); Swal.fire({icon:'success',title:'Pembayaran Sukses',timer:900,showConfirmButton:false}); }
                 }
@@ -2518,9 +2539,14 @@
             <div class="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 border-l-4 ${k.border} relative overflow-hidden">
                 <div class="flex justify-between items-center mb-3">
                     <h4 class="text-xs font-extrabold text-slate-800"><i class="fas ${k.icon} mr-1.5 ${k.text}"></i> ${k.title}</h4>
-                    <button onclick="cetakLPJFormal('${k.id}')" class="px-2.5 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-[10px] font-bold transition flex items-center">
-                        <i class="fas fa-print mr-1 text-slate-500"></i> PRINT
-                    </button>
+                    <div class="flex items-center gap-1">
+                        <button onclick="cetakLPJFormal('${k.id}')" class="px-2 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-[9px] font-bold transition flex items-center" title="Cetak LPJ Tahunan">
+                            <i class="fas fa-file-lines mr-1 text-slate-500"></i> TAHUNAN
+                        </button>
+                        <button onclick="openLPJBulananPicker('${k.id}')" class="px-2 py-1 bg-slate-900 text-white hover:bg-slate-800 rounded-lg text-[9px] font-bold transition flex items-center" title="Cetak LPJ Bulanan">
+                            <i class="fas fa-calendar-days mr-1"></i> BULANAN
+                        </button>
+                    </div>
                 </div>
                 
                 <div class="${k.bg} p-3 rounded-xl mb-3">
@@ -2738,113 +2764,524 @@ function openModalPengeluaran(kasType) {
     });
 }
 
-        function cetakLPJFormal(kasType) {
+
+        function _lpjNormalizeDate_(raw) {
+            const s = String(raw || '').trim();
+            if (!s) return null;
+            const dt = new Date(s.length <= 10 ? s + 'T00:00:00' : s);
+            return Number.isNaN(dt.getTime()) ? null : dt;
+        }
+
+        function _lpjMonthName_(monthId) {
+            const m = MONTHS.find(x => Number(x.id) === Number(monthId));
+            return m ? m.name : '-';
+        }
+
+        function _lpjFormatDate_(raw) {
+            const dt = _lpjNormalizeDate_(raw);
+            if (!dt) return '-';
+            const dd = String(dt.getDate()).padStart(2, '0');
+            const mm = String(dt.getMonth() + 1).padStart(2, '0');
+            return `${dd}-${mm}-${dt.getFullYear()}`;
+        }
+
+        function _lpjGetIuranEntries_(kasType, year, monthIndexFilter = null) {
+            if (kasType !== 'utama' && kasType !== 'sosial') return [];
+
+            const theme = THEMES[kasType];
+            const entries = [];
+
+            dataWarga.forEach(w => {
+                const key = `${w.id}_${year}`;
+                const paidMonths = Array.isArray(mockDB?.[kasType]?.[key])
+                    ? mockDB[kasType][key].map(Number)
+                    : [];
+
+                paidMonths.forEach(bln => {
+                    if (bln < 1 || bln > 12) return;
+
+                    const storedTanggal = iuranTanggal?.[kasType]?.[key]?.[String(bln)] || '';
+                    let transactionDate = storedTanggal;
+                    let transactionMonthIndex = bln - 1;
+
+                    // Untuk data lama yang belum mempunyai tanggal transaksi,
+                    // gunakan bulan iuran sebagai fallback.
+                    if (storedTanggal) {
+                        const dt = _lpjNormalizeDate_(storedTanggal);
+                        if (dt) {
+                            transactionDate = storedTanggal;
+                            if (dt.getFullYear() === year) transactionMonthIndex = dt.getMonth();
+                        }
+                    } else {
+                        transactionDate = `${year}-${String(bln).padStart(2, '0')}-01`;
+                    }
+
+                    if (monthIndexFilter !== null && transactionMonthIndex !== Number(monthIndexFilter)) return;
+
+                    entries.push({
+                        id: `${w.id}_${bln}`,
+                        tanggal: transactionDate,
+                        nama: w.nama,
+                        nrm: w.nrm,
+                        periode: `${_lpjMonthName_(bln)} ${year}`,
+                        bulanIuran: bln,
+                        nominal: Number(theme.nominal) || 0
+                    });
+                });
+            });
+
+            return entries.sort((a, b) => {
+                const da = _lpjNormalizeDate_(a.tanggal)?.getTime() || 0;
+                const db = _lpjNormalizeDate_(b.tanggal)?.getTime() || 0;
+                if (db !== da) return db - da;
+                return String(a.nama).localeCompare(String(b.nama), 'id');
+            });
+        }
+
+        function _lpjGetPemasukanLainForMonth_(kasType, year, monthIndex) {
+            return listPemasukanLain
+                .filter(m => {
+                    if (String(m.kas || '').trim().toLowerCase() !== kasType) return false;
+                    if (String(m.status || 'ACTIVE').toUpperCase() === 'VOID') return false;
+                    const dt = _lpjNormalizeDate_(m.tanggal);
+                    return dt && dt.getFullYear() === year && dt.getMonth() === Number(monthIndex);
+                })
+                .sort((a, b) => {
+                    const da = _lpjNormalizeDate_(a.tanggal)?.getTime() || 0;
+                    const db = _lpjNormalizeDate_(b.tanggal)?.getTime() || 0;
+                    return db - da;
+                });
+        }
+
+        function _lpjGetPengeluaranForMonth_(kasType, year, monthIndex) {
+            return listPengeluaran
+                .filter(p => {
+                    if (String(p.kas || '').trim().toLowerCase() !== kasType) return false;
+                    if (String(p.status || 'ACTIVE').toUpperCase() === 'VOID') return false;
+                    const dt = _lpjNormalizeDate_(p.tanggal);
+                    return dt && dt.getFullYear() === year && dt.getMonth() === Number(monthIndex);
+                })
+                .sort((a, b) => {
+                    const da = _lpjNormalizeDate_(a.tanggal)?.getTime() || 0;
+                    const db = _lpjNormalizeDate_(b.tanggal)?.getTime() || 0;
+                    return db - da;
+                });
+        }
+
+        function _lpjAnnualTotals_(kasType, year) {
             const theme = THEMES[kasType];
 
-            let masukIuran = 0;
+            let totalIuran = 0;
             if (kasType === 'utama' || kasType === 'sosial') {
                 dataWarga.forEach(w => {
-                    masukIuran += (mockDB[kasType][`${w.id}_2026`] || []).length * theme.nominal;
+                    const key = `${w.id}_${year}`;
+                    const paidMonths = Array.isArray(mockDB?.[kasType]?.[key]) ? mockDB[kasType][key] : [];
+                    totalIuran += paidMonths.length * (Number(theme.nominal) || 0);
                 });
             }
 
-            let masukLain = 0;
-            listPemasukanLain.filter(m => m.kas === kasType && String(m.status || 'ACTIVE').toUpperCase() !== 'VOID').forEach(m => masukLain += Number(m.nominal) || 0);
+            const pemasukanLain = listPemasukanLain.filter(m => {
+                return String(m.kas || '').trim().toLowerCase() === kasType &&
+                    String(m.status || 'ACTIVE').toUpperCase() !== 'VOID';
+            });
 
-            const pengeluaranList = listPengeluaran.filter(p => p.kas === kasType && String(p.status || 'ACTIVE').toUpperCase() !== 'VOID');
-            let totalKeluar = 0;
-            pengeluaranList.forEach(p => totalKeluar += Number(p.nominal) || 0);
+            const pengeluaran = listPengeluaran.filter(p => {
+                return String(p.kas || '').trim().toLowerCase() === kasType &&
+                    String(p.status || 'ACTIVE').toUpperCase() !== 'VOID';
+            });
 
-            const totalMasuk = masukIuran + masukLain;
+            const totalLain = pemasukanLain.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+            const totalKeluar = pengeluaran.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+            const totalMasuk = totalIuran + totalLain;
             const saldoAwal = Number(saldoAwalKas[kasType] || 0);
             const mutasi = totalMasuk - totalKeluar;
-            const saldo = saldoAwal + mutasi;
-            const rows = pengeluaranList.length ? pengeluaranList.map((p, idx) => `
-                <tr>
-                    <td style="border:1px solid #cbd5e1;padding:6px;text-align:center">${idx + 1}</td>
-                    <td style="border:1px solid #cbd5e1;padding:6px">${p.tanggal || '-'}</td>
-                    <td style="border:1px solid #cbd5e1;padding:6px">${escapeHtml(cleanTransactionDisplayText(p.keterangan || p.ket || '-'))}</td>
-                    <td style="border:1px solid #cbd5e1;padding:6px;text-align:right;font-weight:600">${formatRupiah(p.nominal || 0)}</td>
-                </tr>`).join('') : `
-                <tr><td colspan="4" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b">Belum ada data pengeluaran.</td></tr>`;
+            const saldoAkhir = saldoAwal + mutasi;
+
+            return { totalIuran, totalLain, totalMasuk, totalKeluar, saldoAwal, mutasi, saldoAkhir };
+        }
+
+        function cetakLPJFormal(kasType) {
+            const theme = THEMES[kasType];
+            const REPORT_YEAR = CURRENT_YEAR;
+            const totals = _lpjAnnualTotals_(kasType, REPORT_YEAR);
 
             const docHtml = `<!doctype html>
 <html lang="id">
-	<head>
-		<meta charset="utf-8">
-			<title>LPJ ${escapeHtml(theme.name)} 2026</title>
-			<style>
-@page{size:A4;margin:15mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;background:#fff;font-size:11px}.paper{width:100%;max-width:180mm;margin:0 auto}.kop{text-align:center;border-bottom:2px solid #0f172a;padding-bottom:10px;margin-bottom:18px}.kop h2{font-size:16px;margin:0 0 4px;font-weight:800}.kop p{margin:2px 0;color:#475569}.judul{text-align:center;margin-bottom:18px}.judul h3{font-size:14px;margin:0 0 5px;text-decoration:underline}.judul p{margin:0;font-weight:700;color:#475569}table{width:100%;border-collapse:collapse}.summary td{padding:8px;border:1px solid #cbd5e1;font-weight:700}.summary .akhir{background:#1e293b;color:#fff}.summary .akhir td:last-child{color:#fcd34d}.detail{margin-top:16px}.detail th{border:1px solid #94a3b8;padding:7px;background:#e2e8f0;text-align:left}.ttd{display:grid;grid-template-columns:1fr 1fr;gap:40px;text-align:center;margin-top:35px;padding-top:14px;border-top:1px solid #cbd5e1}.ttd p:first-child{margin-bottom:60px;font-weight:700}.ttd p:last-child{font-weight:800;text-decoration:none}@media print{.no-print{display:none!important}}
+<head>
+<meta charset="utf-8">
+<title>LPJ Tahunan ${escapeHtml(theme.name)} ${REPORT_YEAR}</title>
+<style>
+@page{size:A4 portrait;margin:16mm}
+*{box-sizing:border-box}
+body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;background:#fff;font-size:11px}
+.paper{width:100%;max-width:178mm;margin:0 auto}
+.kop{text-align:center;border-bottom:2px solid #0f172a;padding-bottom:10px;margin-bottom:20px}
+.kop h2{font-size:16px;margin:0 0 4px;font-weight:800}
+.kop p{margin:2px 0;color:#475569}
+.judul{text-align:center;margin-bottom:20px}
+.judul h3{font-size:14px;margin:0 0 5px;text-decoration:underline}
+.judul p{margin:0;font-weight:700;color:#475569}
+table{width:100%;border-collapse:collapse}
+.summary td{padding:9px;border:1px solid #cbd5e1;font-weight:700}
+.summary td:first-child{width:65%}
+.summary .akhir{background:#1e293b;color:#fff}
+.summary .akhir td:last-child{color:#fcd34d}
+.note{margin-top:9px;color:#64748b;font-size:9px;line-height:1.5}
+.ttd{display:grid;grid-template-columns:1fr 1fr;gap:40px;text-align:center;margin-top:85px;padding-top:14px}
+.ttd p:first-child{margin-bottom:60px;font-weight:700}
+.ttd p:last-child{font-weight:800}
+.no-print{text-align:center;margin-top:28px}
+@media print{.no-print{display:none!important}}
 </style>
-		</head>
-		<body>
-			<div class="paper">
-				<div class="kop">
-					<h2>ACCOUNTABILITY REPORT</h2>
-					<p>RT 03 RW 02 • PADUKUHAN JANTI</p>
-					<p>ELDATABASE • Dokumen Administrasi Keuangan</p>
-				</div>
-				<div class="judul">
-					<h3>LAPORAN REKAPITULASI KEUANGAN</h3>
-					<p>${escapeHtml(theme.name.toUpperCase())} • PERIODE OPERASIONAL TAHUN 2026</p>
-				</div>
-				<table class="summary">
-					<tr>
-						<td>Saldo Awal Kas</td>
-						<td style="text-align:right">${formatRupiah(saldoAwal)}</td>
-					</tr>
-					<tr>
-						<td>Total Pemasukan</td>
-						<td style="text-align:right;color:#047857">${formatRupiah(totalMasuk)}</td>
-					</tr>
-					<tr>
-						<td>Total Pengeluaran Operasional</td>
-						<td style="text-align:right;color:#be123c">${formatRupiah(totalKeluar)}</td>
-					</tr>
-					<tr>
-						<td>Mutasi Bersih</td>
-						<td style="text-align:right">${formatRupiah(mutasi)}</td>
-					</tr>
-					<tr class="akhir">
-						<td>SALDO AKHIR KAS REKONSILIASI</td>
-						<td style="text-align:right">${formatRupiah(saldo)}</td>
-					</tr>
-				</table>
-				<div class="detail">
-					<h4 style="margin:0 0 6px;font-size:11px;text-transform:uppercase">Rincian Pengeluaran</h4>
-					<table>
-						<thead>
-							<tr>
-								<th style="width:40px">No</th>
-								<th style="width:95px">Tanggal</th>
-								<th>Keterangan</th>
-								<th style="width:120px;text-align:right">Nominal</th>
-							</tr>
-						</thead>
-						<tbody>${rows}</tbody>
-					</table>
-				</div>
-				<div class="ttd">
-					<div>
-						<p>Mengetahui,<br>Ketua RT 03</p>
-						<p>( Ari Setiawan )</p>
-					</div>
-					<div>
-						<p>Dibuat Oleh,<br>
-						${escapeHtml(({utama:'Bendahara RT 03', sosial:'Sosial RT 03', jimpitan:'Keamanan RT 03'})[kasType])}</p>
-						<p>( ${escapeHtml(({utama:'Mulyono', sosial:'Eko Setiawan', jimpitan:'Sutarto'})[kasType])} )</p>
-					</div>
-				</div>
-				<div class="no-print" style="text-align:center;margin-top:22px">
-					<button onclick="window.print()" style="padding:9px 16px;border:0;border-radius:8px;background:#1e293b;color:#fff;font-weight:700;cursor:pointer">Cetak Dokumen / Simpan PDF</button>
-				</div>
-			</div>
-		</body>
-	</html>`;
+</head>
+<body>
+<div class="paper">
+    <div class="kop">
+        <h2>ACCOUNTABILITY REPORT</h2>
+        <p>RT 03 RW 02 • PADUKUHAN JANTI</p>
+        <p>ELDATABASE • Dokumen Administrasi Keuangan</p>
+    </div>
+
+    <div class="judul">
+        <h3>LAPORAN REKAPITULASI KEUANGAN TAHUNAN</h3>
+        <p>${escapeHtml(theme.name.toUpperCase())} • TAHUN ${REPORT_YEAR}</p>
+    </div>
+
+    <table class="summary">
+        <tr>
+            <td>Saldo Awal Kas</td>
+            <td style="text-align:right">${formatRupiah(totals.saldoAwal)}</td>
+        </tr>
+        <tr>
+            <td>Total Pemasukan Iuran Warga</td>
+            <td style="text-align:right;color:#047857">${formatRupiah(totals.totalIuran)}</td>
+        </tr>
+        <tr>
+            <td>Total Pemasukan Lain${kasType === 'jimpitan' ? ' / Jimpitan' : ''}</td>
+            <td style="text-align:right;color:#047857">${formatRupiah(totals.totalLain)}</td>
+        </tr>
+        <tr>
+            <td>Total Pengeluaran</td>
+            <td style="text-align:right;color:#be123c">${formatRupiah(totals.totalKeluar)}</td>
+        </tr>
+        <tr>
+            <td>Mutasi Bersih</td>
+            <td style="text-align:right">${formatRupiah(totals.mutasi)}</td>
+        </tr>
+        <tr class="akhir">
+            <td>SALDO AKHIR KAS</td>
+            <td style="text-align:right">${formatRupiah(totals.saldoAkhir)}</td>
+        </tr>
+    </table>
+
+    <p class="note">
+        Laporan tahunan ini merupakan rekapitulasi angka akhir periode untuk ${escapeHtml(theme.name)}.
+        Rincian transaksi tersedia pada LPJ Bulanan masing-masing periode.
+    </p>
+
+    <div class="ttd">
+        <div>
+            <p>Mengetahui,<br>Ketua RT 03</p>
+            <p>( Ari Setiawan )</p>
+        </div>
+        <div>
+            <p>Dibuat Oleh,<br>${escapeHtml(({utama:'Bendahara RT 03', sosial:'Sosial RT 03', jimpitan:'Keamanan RT 03'})[kasType])}</p>
+            <p>( ${escapeHtml(({utama:'Mulyono', sosial:'Eko Setiawan', jimpitan:'Sutarto'})[kasType])} )</p>
+        </div>
+    </div>
+
+    <div class="no-print">
+        <button onclick="window.print()" style="padding:9px 16px;border:0;border-radius:8px;background:#1e293b;color:#fff;font-weight:700;cursor:pointer">Cetak Dokumen / Simpan PDF</button>
+    </div>
+</div>
+</body>
+</html>`;
 
             const preview = window.open('', '_blank', 'width=900,height=1000,scrollbars=yes,resizable=yes');
             if (!preview) {
                 Swal.fire({ icon: 'warning', title: 'Popup Diblokir', text: 'Izinkan popup untuk membuka preview LPJ.' });
+                return;
+            }
+            preview.document.open();
+            preview.document.write(docHtml);
+            preview.document.close();
+            preview.focus();
+        }
+
+        function openLPJBulananPicker(kasType) {
+            const theme = THEMES[kasType];
+            if (!theme) return;
+
+            const monthOptions = MONTHS.map(m =>
+                `<option value="${m.id - 1}">${escapeHtml(m.name)} ${CURRENT_YEAR}</option>`
+            ).join('');
+
+            Swal.fire({
+                title: `LPJ Bulanan • ${escapeHtml(theme.name)}`,
+                html: `
+                    <div class="text-left">
+                        <label class="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Pilih Bulan Laporan</label>
+                        <select id="lpj-bulan-select" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold bg-white">
+                            ${monthOptions}
+                        </select>
+                        <p class="mt-2 text-[9px] leading-4 text-slate-500">
+                            Sistem akan membuat laporan khusus untuk ${escapeHtml(theme.name)} dan hanya memuat transaksi pada bulan yang dipilih.
+                        </p>
+                    </div>
+                `,
+                showCancelButton: true,
+                confirmButtonText: 'Buka LPJ Bulanan',
+                cancelButtonText: 'Batal',
+                confirmButtonColor: theme.btnColor || '#1e293b',
+                customClass: {
+                    popup: 'rounded-2xl',
+                    confirmButton: 'rounded-xl text-xs font-bold px-4 py-2',
+                    cancelButton: 'rounded-xl text-xs font-bold px-4 py-2'
+                },
+                preConfirm: () => {
+                    const value = Number(document.getElementById('lpj-bulan-select')?.value);
+                    if (!Number.isInteger(value) || value < 0 || value > 11) {
+                        Swal.showValidationMessage('Bulan laporan tidak valid.');
+                        return false;
+                    }
+                    return value;
+                }
+            }).then(res => {
+                if (res.isConfirmed) cetakLPJBulanan(kasType, Number(res.value));
+            });
+        }
+
+        function cetakLPJBulanan(kasType, monthIndex) {
+            const theme = THEMES[kasType];
+            const REPORT_YEAR = CURRENT_YEAR;
+            const monthId = Number(monthIndex) + 1;
+            const monthName = _lpjMonthName_(monthId);
+
+            const iuranEntries = _lpjGetIuranEntries_(kasType, REPORT_YEAR, monthIndex);
+            const pemasukanLain = _lpjGetPemasukanLainForMonth_(kasType, REPORT_YEAR, monthIndex);
+            const pengeluaran = _lpjGetPengeluaranForMonth_(kasType, REPORT_YEAR, monthIndex);
+
+            const totalIuran = iuranEntries.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+            const totalLain = pemasukanLain.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+            const totalKeluar = pengeluaran.reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+            const totalMasuk = totalIuran + totalLain;
+            const mutasiBulan = totalMasuk - totalKeluar;
+
+            // Saldo awal bulan = saldo awal tahun + akumulasi mutasi
+            // dari bulan-bulan sebelum bulan yang dipilih.
+            let saldoAwalBulan = Number(saldoAwalKas[kasType] || 0);
+            for (let idx = 0; idx < Number(monthIndex); idx++) {
+                const prevIuran = _lpjGetIuranEntries_(kasType, REPORT_YEAR, idx)
+                    .reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+                const prevLain = _lpjGetPemasukanLainForMonth_(kasType, REPORT_YEAR, idx)
+                    .reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+                const prevKeluar = _lpjGetPengeluaranForMonth_(kasType, REPORT_YEAR, idx)
+                    .reduce((s, x) => s + (Number(x.nominal) || 0), 0);
+                saldoAwalBulan += prevIuran + prevLain - prevKeluar;
+            }
+            const saldoAkhirBulan = saldoAwalBulan + mutasiBulan;
+
+            const iuranRows = iuranEntries.length ? iuranEntries.map((x, idx) => `
+                <tr>
+                    <td>${idx + 1}</td>
+                    <td>${escapeHtml(_lpjFormatDate_(x.tanggal))}</td>
+                    <td><strong>${escapeHtml(x.nama)}</strong><br><span class="muted">${escapeHtml(x.nrm || '-')}</span></td>
+                    <td>${escapeHtml(x.periode)}</td>
+                    <td style="text-align:right;font-weight:700">${formatRupiah(x.nominal)}</td>
+                </tr>
+            `).join('') : `
+                <tr><td colspan="5" class="empty">Belum ada pembayaran iuran warga pada bulan ini.</td></tr>
+            `;
+
+            const pemasukanRows = pemasukanLain.length ? pemasukanLain.map((x, idx) => `
+                <tr>
+                    <td>${idx + 1}</td>
+                    <td>${escapeHtml(_lpjFormatDate_(x.tanggal))}</td>
+                    <td>${escapeHtml(x.kategori || '-')}</td>
+                    <td>${escapeHtml(cleanTransactionDisplayText(x.keterangan || x.ket || '-'))}</td>
+                    <td style="text-align:right;font-weight:700">${formatRupiah(x.nominal || 0)}</td>
+                </tr>
+            `).join('') : `
+                <tr><td colspan="5" class="empty">Belum ada pemasukan lain pada bulan ini.</td></tr>
+            `;
+
+            const pengeluaranRows = pengeluaran.length ? pengeluaran.map((x, idx) => `
+                <tr>
+                    <td>${idx + 1}</td>
+                    <td>${escapeHtml(_lpjFormatDate_(x.tanggal))}</td>
+                    <td>${escapeHtml(x.kategori || '-')}</td>
+                    <td>${escapeHtml(cleanTransactionDisplayText(x.keterangan || x.ket || '-'))}</td>
+                    <td style="text-align:right;font-weight:700">${formatRupiah(x.nominal || 0)}</td>
+                </tr>
+            `).join('') : `
+                <tr><td colspan="5" class="empty">Belum ada pengeluaran pada bulan ini.</td></tr>
+            `;
+
+            const detailIuranTitle = kasType === 'jimpitan'
+                ? 'Pemasukan Jimpitan'
+                : 'Pemasukan Iuran Warga';
+
+            const detailIuranTotalLabel = kasType === 'jimpitan'
+                ? 'Total Pemasukan Jimpitan'
+                : 'Total Iuran Warga';
+
+            const docHtml = `<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>LPJ Bulanan ${escapeHtml(theme.name)} ${escapeHtml(monthName)} ${REPORT_YEAR}</title>
+<style>
+@page{size:A4 portrait;margin:13mm}
+*{box-sizing:border-box}
+body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;background:#fff;font-size:9.5px}
+.paper{width:100%;max-width:180mm;margin:0 auto}
+.kop{text-align:center;border-bottom:2px solid #0f172a;padding-bottom:9px;margin-bottom:15px}
+.kop h2{font-size:15px;margin:0 0 3px;font-weight:800}
+.kop p{margin:2px 0;color:#475569;font-size:9px}
+.judul{text-align:center;margin-bottom:14px}
+.judul h3{font-size:13px;margin:0 0 4px;text-decoration:underline}
+.judul p{margin:0;font-weight:700;color:#475569}
+.summary{width:100%;border-collapse:collapse;margin-bottom:14px}
+.summary td{border:1px solid #cbd5e1;padding:6px;font-weight:700}
+.summary td:first-child{width:65%}
+.summary .akhir{background:#1e293b;color:#fff}
+.summary .akhir td:last-child{color:#fcd34d}
+.section{margin-top:14px}
+.section h4{font-size:10px;text-transform:uppercase;margin:0 0 5px}
+.table{width:100%;border-collapse:collapse}
+.table th{border:1px solid #94a3b8;background:#e2e8f0;padding:5px;text-align:left;font-size:9px}
+.table td{border:1px solid #cbd5e1;padding:5px;vertical-align:top}
+.table .empty{padding:9px;text-align:center;color:#64748b}
+.muted{color:#64748b;font-size:8px}
+.total-row td{background:#f8fafc;font-weight:800}
+.note{margin-top:8px;color:#64748b;font-size:8.5px;line-height:1.45}
+.ttd{display:grid;grid-template-columns:1fr 1fr;gap:35px;text-align:center;margin-top:38px;padding-top:10px}
+.ttd p:first-child{margin-bottom:50px;font-weight:700}
+.ttd p:last-child{font-weight:800}
+.no-print{text-align:center;margin-top:18px}
+@media print{.no-print{display:none!important}}
+</style>
+</head>
+<body>
+<div class="paper">
+    <div class="kop">
+        <h2>ACCOUNTABILITY REPORT</h2>
+        <p>RT 03 RW 02 • PADUKUHAN JANTI</p>
+        <p>ELDATABASE • Dokumen Administrasi Keuangan</p>
+    </div>
+
+    <div class="judul">
+        <h3>LAPORAN REKAPITULASI KEUANGAN BULANAN</h3>
+        <p>${escapeHtml(theme.name.toUpperCase())} • ${escapeHtml(monthName.toUpperCase())} ${REPORT_YEAR}</p>
+    </div>
+
+    <table class="summary">
+        <tr><td>Saldo Awal Bulan</td><td style="text-align:right">${formatRupiah(saldoAwalBulan)}</td></tr>
+        <tr><td>${kasType === 'jimpitan' ? 'Total Pemasukan Jimpitan' : 'Total Pemasukan Iuran'}</td><td style="text-align:right;color:#047857">${formatRupiah(kasType === 'jimpitan' ? totalLain : totalIuran)}</td></tr>
+        <tr><td>Total Pemasukan Lain</td><td style="text-align:right;color:#047857">${formatRupiah(kasType === 'jimpitan' ? 0 : totalLain)}</td></tr>
+        <tr><td>Total Pemasukan Bulan Ini</td><td style="text-align:right;color:#047857;font-weight:900">${formatRupiah(totalMasuk)}</td></tr>
+        <tr><td>Total Pengeluaran Bulan Ini</td><td style="text-align:right;color:#be123c">${formatRupiah(totalKeluar)}</td></tr>
+        <tr><td>Mutasi Bersih Bulan Ini</td><td style="text-align:right">${formatRupiah(mutasiBulan)}</td></tr>
+        <tr class="akhir"><td>SALDO AKHIR BULAN</td><td style="text-align:right">${formatRupiah(saldoAkhirBulan)}</td></tr>
+    </table>
+
+    ${kasType !== 'jimpitan' ? `
+    <div class="section">
+        <h4>Rekap Iuran Bulanan</h4>
+        <table class="table">
+            <tbody>
+                <tr class="total-row">
+                    <td style="width:65%">Total Iuran ${escapeHtml(theme.name)} Bulan Ini</td>
+                    <td style="text-align:right;font-weight:900">${formatRupiah(totalIuran)}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    ` : `
+    <div class="section">
+        <h4>Pemasukan Jimpitan</h4>
+        <table class="table">
+            <tbody>
+                <tr class="total-row">
+                    <td style="width:65%">Total Pemasukan Jimpitan Bulan Ini</td>
+                    <td style="text-align:right;font-weight:900">${formatRupiah(totalLain)}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    `}
+
+    ${kasType !== 'jimpitan' ? `
+    <div class="section">
+        <h4>Pemasukan Lain</h4>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th style="width:32px;text-align:center">No</th>
+                    <th style="width:70px">Tanggal</th>
+                    <th style="width:85px">Kategori</th>
+                    <th>Keterangan</th>
+                    <th style="width:85px;text-align:right">Nominal</th>
+                </tr>
+            </thead>
+            <tbody>${pemasukanRows}</tbody>
+            <tfoot>
+                <tr class="total-row">
+                    <td colspan="4">Total Pemasukan Lain</td>
+                    <td style="text-align:right">${formatRupiah(totalLain)}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    ` : ''}
+
+    <div class="section">
+        <h4>Rincian Pengeluaran</h4>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th style="width:32px;text-align:center">No</th>
+                    <th style="width:70px">Tanggal</th>
+                    <th style="width:85px">Kategori</th>
+                    <th>Keterangan / Uraian</th>
+                    <th style="width:85px;text-align:right">Nominal</th>
+                </tr>
+            </thead>
+            <tbody>${pengeluaranRows}</tbody>
+            <tfoot>
+                <tr class="total-row">
+                    <td colspan="4">Total Pengeluaran</td>
+                    <td style="text-align:right">${formatRupiah(totalKeluar)}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
+    <div class="note">
+        Laporan Rekapitulasi Keuangan Digital. Resmi dan Terverifikasi Sistem.
+    </div>
+
+    <div class="ttd">
+        <div>
+            <p>Mengetahui,<br>Ketua RT 03</p>
+            <p>( Ari Setiawan )</p>
+        </div>
+        <div>
+            <p>Dibuat Oleh,<br>${escapeHtml(({utama:'Bendahara RT 03', sosial:'Sosial RT 03', jimpitan:'Keamanan RT 03'})[kasType])}</p>
+            <p>( ${escapeHtml(({utama:'Mulyono', sosial:'Eko Setiawan', jimpitan:'Sutarto'})[kasType])} )</p>
+        </div>
+    </div>
+
+    <div class="no-print">
+        <button onclick="window.print()" style="padding:9px 16px;border:0;border-radius:8px;background:#1e293b;color:#fff;font-weight:700;cursor:pointer">Cetak Dokumen / Simpan PDF</button>
+    </div>
+</div>
+</body>
+</html>`;
+
+            const preview = window.open('', '_blank', 'width=900,height=1000,scrollbars=yes,resizable=yes');
+            if (!preview) {
+                Swal.fire({ icon: 'warning', title: 'Popup Diblokir', text: 'Izinkan popup untuk membuka preview LPJ Bulanan.' });
                 return;
             }
             preview.document.open();
