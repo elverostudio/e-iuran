@@ -2370,6 +2370,27 @@
             return text || '-';
         }
 
+        // Untuk transaksi lama, backend dapat mengembalikan kolom kategori kosong
+        // karena kategori dahulu juga disimpan di awal field Keterangan: [Kategori] ...
+        // Helper ini mengambil kategori dari field kategori terlebih dahulu, lalu fallback
+        // ke prefix [Kategori] pada keterangan agar laporan lama tetap terbaca benar.
+        function getTransactionCategoryForLpj(x) {
+            const direct = String(x?.kategori ?? '').trim();
+            if (direct) return direct;
+
+            const raw = String(x?.keterangan ?? x?.ket ?? '').trim();
+            const match = raw.match(/^\[([^\]]+)\]\s*/);
+            return match ? match[1].trim() : '-';
+        }
+
+        // Keterangan laporan ditampilkan tanpa prefix [Kategori] karena kategori
+        // sudah berada di kolom tersendiri.
+        function getTransactionDescriptionForLpj(x) {
+            let text = cleanTransactionDisplayText(x?.keterangan ?? x?.ket ?? '-');
+            text = text.replace(/^\[([^\]]+)\]\s*/i, '').trim();
+            return text || '-';
+        }
+
         function renderLPJ() {
     const perms = getPermissions();
     const container = document.getElementById('container-lpj');
@@ -2944,7 +2965,7 @@ table{width:100%;border-collapse:collapse}
 
     <div class="judul">
         <h3>LAPORAN REKAPITULASI KEUANGAN TAHUNAN</h3>
-        <p>${escapeHtml(theme.name.toUpperCase())} • TAHUN ${REPORT_YEAR}</p>
+        <p>${escapeHtml(theme.name.toUpperCase())} • PERIODE OPERASIONAL TAHUN ${REPORT_YEAR}</p>
     </div>
 
     <table class="summary">
@@ -3024,8 +3045,8 @@ table{width:100%;border-collapse:collapse}
                         <select id="lpj-bulan-select" class="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-bold bg-white">
                             ${monthOptions}
                         </select>
-                        <p class="mt-2 text-[9px] leading-4 text-slate-500">
-                            Sistem akan membuat laporan khusus untuk ${escapeHtml(theme.name)} dan hanya memuat transaksi pada bulan yang dipilih.
+                        <p class="mt-2 text-[9px] leading-4 text-slate-400">
+                            Sistem akan membuat Laporan khusus untuk ${escapeHtml(theme.name)} dan hanya memuat transaksi pada bulan yang dipilih.
                         </p>
                     </div>
                 `,
@@ -3097,8 +3118,8 @@ table{width:100%;border-collapse:collapse}
                 <tr>
                     <td>${idx + 1}</td>
                     <td>${escapeHtml(_lpjFormatDate_(x.tanggal))}</td>
-                    <td>${escapeHtml(x.kategori || '-')}</td>
-                    <td>${escapeHtml(cleanTransactionDisplayText(x.keterangan || x.ket || '-'))}</td>
+                    <td>${escapeHtml(getTransactionCategoryForLpj(x))}</td>
+                    <td>${escapeHtml(getTransactionDescriptionForLpj(x))}</td>
                     <td style="text-align:right;font-weight:700">${formatRupiah(x.nominal || 0)}</td>
                 </tr>
             `).join('') : `
@@ -3109,8 +3130,8 @@ table{width:100%;border-collapse:collapse}
                 <tr>
                     <td>${idx + 1}</td>
                     <td>${escapeHtml(_lpjFormatDate_(x.tanggal))}</td>
-                    <td>${escapeHtml(x.kategori || '-')}</td>
-                    <td>${escapeHtml(cleanTransactionDisplayText(x.keterangan || x.ket || '-'))}</td>
+                    <td>${escapeHtml(getTransactionCategoryForLpj(x))}</td>
+                    <td>${escapeHtml(getTransactionDescriptionForLpj(x))}</td>
                     <td style="text-align:right;font-weight:700">${formatRupiah(x.nominal || 0)}</td>
                 </tr>
             `).join('') : `
@@ -3172,7 +3193,7 @@ body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;background:#f
 
     <div class="judul">
         <h3>LAPORAN REKAPITULASI KEUANGAN BULANAN</h3>
-        <p>${escapeHtml(theme.name.toUpperCase())} • ${escapeHtml(monthName.toUpperCase())} ${REPORT_YEAR}</p>
+        <p>${escapeHtml(theme.name.toUpperCase())} • PERIODE OPERASIONAL ${escapeHtml(monthName.toUpperCase())} ${REPORT_YEAR}</p>
     </div>
 
     <table class="summary">
