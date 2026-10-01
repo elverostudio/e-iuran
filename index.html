@@ -530,7 +530,7 @@
                     <div>
                         <h3 class="text-xs font-extrabold text-slate-900 uppercase tracking-wider">Progres Iuran</h3>
                     </div>
-                    <div id="dashboard-period-label" class="text-[9px] font-bold text-slate-900 uppercase mt-0.5">September 2026</div>
+                    <div id="dashboard-period-label" class="text-[9px] font-bold text-slate-900 uppercase mt-0.5"></div>
                 </div>
                     <div class="grid grid-cols-2 gap-2.5">
                         <div class="rounded-xl bg-blue-100 border border-blue-200 p-3 shadow-sm">
@@ -869,8 +869,51 @@
             { id: 10, name: 'Oktober' }, { id: 11, name: 'November' }, { id: 12, name: 'Desember' }
         ];
 
-        const CURRENT_MONTH = 9; // September
-        const CURRENT_YEAR = 2026;
+        // Periode berjalan mengikuti tanggal aktual di zona waktu RT 03 (Asia/Jakarta).
+        function getRealtimePeriod_() {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'Asia/Jakarta',
+                year: 'numeric',
+                month: 'numeric'
+            }).formatToParts(new Date());
+            const map = {};
+            parts.forEach(p => { if (p.type !== 'literal') map[p.type] = p.value; });
+            return { year: Number(map.year), month: Number(map.month) };
+        }
+
+        const __initialPeriod = getRealtimePeriod_();
+        let CURRENT_MONTH = __initialPeriod.month;
+        let CURRENT_YEAR = __initialPeriod.year;
+
+        function syncRealtimePeriod_() {
+            const next = getRealtimePeriod_();
+            const changed = next.month !== CURRENT_MONTH || next.year !== CURRENT_YEAR;
+            if (changed) {
+                CURRENT_MONTH = next.month;
+                CURRENT_YEAR = next.year;
+            }
+
+            const monthName = MONTHS[CURRENT_MONTH - 1]?.name || String(CURRENT_MONTH);
+            const label = document.getElementById('dashboard-period-label');
+            if (label) label.textContent = `${monthName} ${CURRENT_YEAR}`;
+
+            const periodSummary = document.getElementById('period-lock-summary');
+            if (periodSummary) {
+                const key = getPeriodKey(CURRENT_YEAR, CURRENT_MONTH);
+                periodSummary.textContent = periodLocks[key]
+                    ? `Periode ${monthName} ${CURRENT_YEAR} • TERKUNCI`
+                    : `Periode ${monthName} ${CURRENT_YEAR} • TERBUKA`;
+            }
+
+            return changed;
+        }
+
+        // Cek perubahan tanggal secara berkala agar perpindahan bulan terjadi tanpa reload manual.
+        setInterval(() => {
+            if (syncRealtimePeriod_()) {
+                updateAplikasiUI();
+            }
+        }, 60000);
 
         let dataWarga = [
             { id: 'W000', nama: 'ELVERO STUDIO', nrm: 'NRM 00104', nph: '6289621061984', status: 'AKTIF' }
@@ -966,6 +1009,7 @@
         }
 
         function bootstrapApp() {
+            syncRealtimePeriod_();
             if (__bootstrapInFlight) return;
             __bootstrapInFlight = true;
             initSelectWarga();
@@ -1024,6 +1068,7 @@
         }
 
         function updateAplikasiUI() {
+            syncRealtimePeriod_();
             initSelectWarga();
             if (currentMainTab === 'home') {
                 renderDashboard();
@@ -1181,10 +1226,11 @@
         function getCurrentDisplayedYear(){return parseInt(document.getElementById('select-tahun')?.value||CURRENT_YEAR,10);}
         function updatePeriodLockSummary(){const el=document.getElementById('period-lock-summary');if(!el)return;const key=getPeriodKey(CURRENT_YEAR,CURRENT_MONTH);el.textContent=periodLocks[key]?`Periode ${MONTHS[CURRENT_MONTH-1].name} ${CURRENT_YEAR} • TERKUNCI`:`Periode ${MONTHS[CURRENT_MONTH-1].name} ${CURRENT_YEAR} • TERBUKA`;}
         function openPeriodLockModal(){if(!authToken){openLoginModal();return;}if(ROLES[currentRoleIndex]?.id!=='super_admin'){showAksesDitolak('Kunci periode hanya dapat dikelola Developer.');return;}const years=[2026,2027,2028,2029,2030];window.__periodLockSelection={year:CURRENT_YEAR,month:CURRENT_MONTH};Swal.fire({title:'Kontrol Tutup Buku',html:`<div class="text-left space-y-3 text-xs"><div><label class="font-bold text-slate-600 block mb-1">Tahun</label><select id="pl-year" class="w-full border p-2.5 rounded-xl font-bold">${years.map(y=>`<option value="${y}" ${y===CURRENT_YEAR?'selected':''}>${y}</option>`).join('')}</select></div><div><label class="font-bold text-slate-600 block mb-1">Bulan</label><select id="pl-month" class="w-full border p-2.5 rounded-xl font-bold">${MONTHS.map(m=>`<option value="${m.id}" ${m.id===CURRENT_MONTH?'selected':''}>${m.name}</option>`).join('')}</select></div><p id="pl-status" class="text-[10px] text-slate-500"></p></div>`,showDenyButton:true,showCancelButton:true,confirmButtonText:'Kunci Periode',denyButtonText:'Buka Periode',cancelButtonText:'Batal',confirmButtonColor:'#1e293b',denyButtonColor:'#f59e0b',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2',denyButton:'rounded-xl text-xs font-bold px-4 py-2',cancelButton:'rounded-xl text-xs font-bold px-4 py-2'},didOpen:()=>{const upd=()=>{const y=Number(document.getElementById('pl-year').value),m=Number(document.getElementById('pl-month').value);window.__periodLockSelection={year:y,month:m};const key=getPeriodKey(y,m);document.getElementById('pl-status').textContent=periodLocks[key]?'Status saat ini: TERKUNCI':'Status saat ini: TERBUKA';};document.getElementById('pl-year').onchange=upd;document.getElementById('pl-month').onchange=upd;upd();},preConfirm:()=>({year:Number(document.getElementById('pl-year').value),month:Number(document.getElementById('pl-month').value),locked:true})}).then(res=>{if(!res.isConfirmed&&!res.isDenied)return;const value=res.isConfirmed?res.value:{year:Number(window.__periodLockSelection?.year||CURRENT_YEAR),month:Number(window.__periodLockSelection?.month||CURRENT_MONTH),locked:false};if(!value.year||!value.month)return;Swal.fire({title:value.locked?'Mengunci...':'Membuka...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});google.script.run.withSuccessHandler(()=>{periodLocks[getPeriodKey(value.year,value.month)]=!!value.locked;renderLPJ();updatePeriodLockSummary();Swal.fire({icon:'success',title:value.locked?'Periode Dikunci':'Periode Dibuka',timer:1200,showConfirmButton:false});}).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal',text:err?.message||'Status periode gagal diubah.'})).savePeriodLock(value.year,value.month,value.locked,authToken);});}
-        function getKasSystemBalance(kasType){let masukIuran=0;if(kasType==='utama'||kasType==='sosial')dataWarga.forEach(w=>masukIuran+=(mockDB[kasType]?.[`${w.id}_2026`]||[]).length*THEMES[kasType].nominal);const masukLain=listPemasukanLain.filter(m=>String(m.kas).trim().toLowerCase()===kasType&&String(m.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,m)=>s+Number(m.nominal||0),0);const keluar=listPengeluaran.filter(p=>String(p.kas).trim().toLowerCase()===kasType&&String(p.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,p)=>s+Number(p.nominal||0),0);return Number(saldoAwalKas[kasType]||0)+masukIuran+masukLain-keluar;}
-        function openRekonsiliasiModal(kasType){if(!authToken){openLoginModal();return;}const perms=getPermissions();if(!perms[kasType]){showAksesDitolak('Rekonsiliasi hanya dapat dilakukan pengurus kas terkait atau Developer.');return;}const systemBalance=getKasSystemBalance(kasType),last=listRekonsiliasi.find(x=>String(x.kas)===kasType);Swal.fire({title:`Rekonsiliasi ${THEMES[kasType].name}`,html:`<div class="text-left text-xs space-y-3"><div class="bg-slate-50 border rounded-xl p-3"><p class="text-slate-500">Saldo Sistem</p><p class="text-lg font-black text-slate-800">${formatRupiah(systemBalance)}</p></div><div><label class="font-bold text-slate-600 block mb-1">Saldo Fisik / Bank</label><input id="rek-fisik" type="number" min="0" value="${last?last.saldoFisik:systemBalance}" class="w-full border p-2.5 rounded-xl text-sm font-bold"></div><div><label class="font-bold text-slate-600 block mb-1">Catatan</label><textarea id="rek-catatan" class="w-full border p-2.5 rounded-xl text-xs" rows="3" placeholder="Contoh: cash opname setelah penutupan bulan">${last?escapeHtml(last.catatan):''}</textarea></div></div>`,showCancelButton:true,confirmButtonText:'Simpan Rekonsiliasi',cancelButtonText:'Batal',confirmButtonColor:THEMES[kasType].btnColor||'#2563eb',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2',cancelButton:'rounded-xl text-xs font-bold px-4 py-2'},preConfirm:()=>{const fisik=Number(document.getElementById('rek-fisik')?.value);if(!Number.isFinite(fisik)||fisik<0){Swal.showValidationMessage('Saldo fisik tidak valid.');return false;}return {fisik,catatan:document.getElementById('rek-catatan')?.value||''};}}).then(res=>{if(!res.isConfirmed)return;Swal.fire({title:'Menyimpan...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});google.script.run.withSuccessHandler(resp=>{listRekonsiliasi.unshift({kas:kasType,saldoSistem:systemBalance,saldoFisik:res.value.fisik,selisih:Number(resp.selisih||res.value.fisik-systemBalance),catatan:res.value.catatan});renderLPJ();const d=Number(resp.selisih||0);Swal.fire({icon:Math.abs(d)<1?'success':'warning',title:Math.abs(d)<1?'Rekonsiliasi Seimbang':'Ada Selisih',text:`Selisih: ${formatRupiah(d)}`,timer:1800,showConfirmButton:false});}).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal',text:err?.message||'Rekonsiliasi gagal disimpan.'})).saveReconciliation(kasType,2026,systemBalance,res.value.fisik,res.value.catatan,authToken);});}
+        function getKasSystemBalance(kasType){let masukIuran=0;if(kasType==='utama'||kasType==='sosial')dataWarga.forEach(w=>masukIuran+=(mockDB[kasType]?.[`${w.id}_${CURRENT_YEAR}`]||[]).length*THEMES[kasType].nominal);const masukLain=listPemasukanLain.filter(m=>String(m.kas).trim().toLowerCase()===kasType&&String(m.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,m)=>s+Number(m.nominal||0),0);const keluar=listPengeluaran.filter(p=>String(p.kas).trim().toLowerCase()===kasType&&String(p.status||'ACTIVE').toUpperCase()!=='VOID').reduce((s,p)=>s+Number(p.nominal||0),0);return Number(saldoAwalKas[kasType]||0)+masukIuran+masukLain-keluar;}
+        function openRekonsiliasiModal(kasType){if(!authToken){openLoginModal();return;}const perms=getPermissions();if(!perms[kasType]){showAksesDitolak('Rekonsiliasi hanya dapat dilakukan pengurus kas terkait atau Developer.');return;}const systemBalance=getKasSystemBalance(kasType),last=listRekonsiliasi.find(x=>String(x.kas)===kasType);Swal.fire({title:`Rekonsiliasi ${THEMES[kasType].name}`,html:`<div class="text-left text-xs space-y-3"><div class="bg-slate-50 border rounded-xl p-3"><p class="text-slate-500">Saldo Sistem</p><p class="text-lg font-black text-slate-800">${formatRupiah(systemBalance)}</p></div><div><label class="font-bold text-slate-600 block mb-1">Saldo Fisik / Bank</label><input id="rek-fisik" type="number" min="0" value="${last?last.saldoFisik:systemBalance}" class="w-full border p-2.5 rounded-xl text-sm font-bold"></div><div><label class="font-bold text-slate-600 block mb-1">Catatan</label><textarea id="rek-catatan" class="w-full border p-2.5 rounded-xl text-xs" rows="3" placeholder="Contoh: cash opname setelah penutupan bulan">${last?escapeHtml(last.catatan):''}</textarea></div></div>`,showCancelButton:true,confirmButtonText:'Simpan Rekonsiliasi',cancelButtonText:'Batal',confirmButtonColor:THEMES[kasType].btnColor||'#2563eb',customClass:{popup:'rounded-2xl',confirmButton:'rounded-xl text-xs font-bold px-4 py-2',cancelButton:'rounded-xl text-xs font-bold px-4 py-2'},preConfirm:()=>{const fisik=Number(document.getElementById('rek-fisik')?.value);if(!Number.isFinite(fisik)||fisik<0){Swal.showValidationMessage('Saldo fisik tidak valid.');return false;}return {fisik,catatan:document.getElementById('rek-catatan')?.value||''};}}).then(res=>{if(!res.isConfirmed)return;Swal.fire({title:'Menyimpan...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});google.script.run.withSuccessHandler(resp=>{listRekonsiliasi.unshift({kas:kasType,saldoSistem:systemBalance,saldoFisik:res.value.fisik,selisih:Number(resp.selisih||res.value.fisik-systemBalance),catatan:res.value.catatan});renderLPJ();const d=Number(resp.selisih||0);Swal.fire({icon:Math.abs(d)<1?'success':'warning',title:Math.abs(d)<1?'Rekonsiliasi Seimbang':'Ada Selisih',text:`Selisih: ${formatRupiah(d)}`,timer:1800,showConfirmButton:false});}).withFailureHandler(err=>Swal.fire({icon:'error',title:'Gagal',text:err?.message||'Rekonsiliasi gagal disimpan.'})).saveReconciliation(kasType,CURRENT_YEAR,systemBalance,res.value.fisik,res.value.catatan,authToken);});}
 
         function renderRoleSensitiveUI() {
+            syncRealtimePeriod_();
             const perms = getPermissions();
             const agendaBtn = document.getElementById('btn-agenda-edit');
             if (agendaBtn) agendaBtn.classList.toggle('hidden', !perms.agenda);
@@ -1346,6 +1392,7 @@
         }
 
         function switchMainTab(tab) {
+            syncRealtimePeriod_();
             currentMainTab = tab;
             const sections = ['home', 'iuran', 'jimpitan', 'kas', 'warga', 'rekap'];
             sections.forEach(s => {
@@ -1486,13 +1533,24 @@
 
         function initSelectWarga() {
             const select = document.getElementById('select-warga');
+            if (!select) return;
+
+            const previousValue = String(select.value || '').trim();
             select.innerHTML = '';
+
             dataWarga.forEach(w => {
                 const opt = document.createElement('option');
                 opt.value = w.id;
                 opt.textContent = w.nama.toUpperCase();
                 select.appendChild(opt);
             });
+
+            // Pertahankan warga yang terakhir dipilih selama datanya masih tersedia.
+            if (previousValue && [...select.options].some(o => o.value === previousValue)) {
+                select.value = previousValue;
+            } else if (select.options.length) {
+                select.selectedIndex = 0;
+            }
         }
 
         function renderDataIuran() {
@@ -2392,6 +2450,7 @@
         }
 
         function renderLPJ() {
+    syncRealtimePeriod_();
     const perms = getPermissions();
     const container = document.getElementById('container-lpj');
     if (!container) return;
@@ -2413,7 +2472,7 @@
 
         if (k.id === 'utama' || k.id === 'sosial') {
             dataWarga.forEach(w => {
-                const keyWarga = w.id + '_2026';
+                const keyWarga = w.id + '_' + CURRENT_YEAR;
                 const bulanDibayar = (mockDB[k.id] && mockDB[k.id][keyWarga]) ? mockDB[k.id][keyWarga] : [];
                 
                 masukIuran += bulanDibayar.length * THEMES[k.id].nominal;
@@ -2425,7 +2484,7 @@
                         if (matchMonth) namaBln = matchMonth.name;
                     }
 
-                    const keyIuran = w.id + '_2026';
+                    const keyIuran = w.id + '_' + CURRENT_YEAR;
                     const storedTanggal = iuranTanggal?.[k.id]?.[keyIuran]?.[String(bln)] || '';
                     const padBulan = String(bln).length < 2 ? '0' + bln : bln;
                     // Kompatibilitas data lama: bila tanggal transaksi belum pernah tersimpan,
@@ -3034,7 +3093,7 @@ table{width:100%;border-collapse:collapse}
             if (!theme) return;
 
             const monthOptions = MONTHS.map(m =>
-                `<option value="${m.id - 1}">${escapeHtml(m.name)} ${CURRENT_YEAR}</option>`
+                `<option value="${m.id - 1}" ${m.id === CURRENT_MONTH ? 'selected' : ''}>${escapeHtml(m.name)} ${CURRENT_YEAR}</option>`
             ).join('');
 
             Swal.fire({
@@ -3537,6 +3596,7 @@ body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;background:#f
         }
 
         function renderDashboard() {
+            syncRealtimePeriod_();
             const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
             const monthName = monthNames[Number(CURRENT_MONTH) - 1] || String(CURRENT_MONTH);
             const totalWarga = Array.isArray(dataWarga) ? dataWarga.length : 0;
@@ -3700,7 +3760,7 @@ body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;background:#f
             tbody.innerHTML = '';
 
             dataWarga.forEach(w => {
-                const key = `${w.id}_2026`;
+                const key = `${w.id}_${CURRENT_YEAR}`;
                 const paidMonths = mockDB[kasType][key] || [];
 
                 let cellsHTML = '';
@@ -3731,7 +3791,7 @@ body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;background:#f
         function exportCSV() {
             let csvContent = "data:text/csv;charset=utf-8,ID,Nama,Nrm,Status,Lunas_KasUtama_2026,Lunas_KasSosial_2026\n";
             dataWarga.forEach(w => {
-                const key = `${w.id}_2026`;
+                const key = `${w.id}_${CURRENT_YEAR}`;
                 const paidUtama = (mockDB['utama'][key] || []).length;
                 const paidSosial = (mockDB['sosial'][key] || []).length;
                 csvContent += `${w.id},"${w.nama}","${w.nrm}",${w.status},${paidUtama},${paidSosial}\n`;
