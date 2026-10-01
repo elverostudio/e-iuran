@@ -489,7 +489,7 @@
                 <div class="bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-sm mb-2">
                 <div class="flex items-center justify-between mb-2 px-1">
                     <div>
-                        <h3 class="text-xs font-extrabold text-slate-900 uppercase tracking-wider">Running Balance</h3>
+                        <h3 class="text-xs font-extrabold text-slate-900 uppercase tracking-wider">Saldo Berjalan</h3>
                     </div>
                     <span class="text-[9px] font-bold text-slate-900">REALTIME</span>
                 </div>
@@ -2623,7 +2623,7 @@
                         <button onclick="cetakLPJFormal('${k.id}')" class="px-2 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-[9px] font-bold transition flex items-center" title="Cetak LPJ Tahunan">
                             <i class="fas fa-file-lines mr-1 text-slate-500"></i> TAHUNAN
                         </button>
-                        <button onclick="openLPJBulananPicker('${k.id}')" class="px-2 py-1 bg-slate-900 text-white hover:bg-slate-800 rounded-lg text-[9px] font-bold transition flex items-center" title="Cetak LPJ Bulanan">
+                        <button onclick="openLPJBulananPicker('${k.id}')" class="px-2 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-[9px] font-bold transition flex items-center" title="Cetak LPJ Bulanan">
                             <i class="fas fa-calendar-days mr-1"></i> BULANAN
                         </button>
                     </div>
@@ -2649,7 +2649,7 @@
                 </div>
 
                 <div class="bg-slate-50 rounded-xl p-2.5 max-h-44 overflow-y-auto no-scrollbar">
-                    <p class="text-[9px] font-extrabold text-slate-400 uppercase mb-1.5 border-b border-slate-200 pb-1">Transaksi & Kwitansi Digital</p>
+                    <p class="text-[9px] font-extrabold text-slate-400 uppercase mb-1.5 border-b border-slate-200 pb-1">Jurnal Riwayat Transaksi</p>
                     ${transaksiHtml}
                 </div>
                 ${(() => { const lastR=listRekonsiliasi.find(x=>String(x.kas)===String(k.id)); if(!lastR)return ''; const diff=Number(lastR.selisih||0); return `<div class="mt-2 px-2.5 py-2 rounded-xl border ${Math.abs(diff)<1?'bg-emerald-50 border-emerald-100':'bg-amber-50 border-amber-100'} text-[9px]"><div class="flex justify-between"><span class="font-extrabold ${Math.abs(diff)<1?'text-emerald-700':'text-amber-700'}">REKONSILIASI TERAKHIR</span><span class="font-black">${Math.abs(diff)<1?'SEIMBANG':'SELISIH '+formatRupiah(diff)}</span></div><div class="text-slate-500 mt-0.5">Fisik ${formatRupiah(lastR.saldoFisik)} • Sistem ${formatRupiah(lastR.saldoSistem)}</div></div>`; })()}
